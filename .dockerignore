@@ -1,0 +1,20 @@
+.git
+.gitignore
+.DS_Store
+**/.DS_Store
+
+# Build outputs
+**/target
+**/node_modules
+**/build
+
+# Local runtime files
+deploy/.env.production
+deploy/.native-runtime
+deploy/.native-runtime/**
+deploy/.native-runtime/*
+deploy/.native-runtime/**
+
+# Misc
+*.swp
+*.*~

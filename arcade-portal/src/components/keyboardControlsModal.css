@@ -1,0 +1,49 @@
+.keyboardControlsModal__hint {
+  margin-bottom: 12px;
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+}
+
+.keyboardControlsModal__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.keyboardControlsModal__row {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.keyboardControlsModal__label {
+  font-weight: 600;
+}
+
+.keyboardControlsModal__bindings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 28px;
+  align-items: center;
+}
+
+.keyboardControlsModal__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.keyboardControlsModal__empty {
+  opacity: 0.65;
+  font-size: 12px;
+}
+
+@media (max-width: 520px) {
+  .keyboardControlsModal__row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}

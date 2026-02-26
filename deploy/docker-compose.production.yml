@@ -1,0 +1,109 @@
+services:
+  signal:
+    image: ${SIGNAL_IMAGE:-cloud-arcade/signal:latest}
+    build:
+      context: ${SIGNAL_BUILD_CONTEXT:-..}
+      dockerfile: ${SIGNAL_DOCKERFILE:-deploy/dockerfiles/signal.Dockerfile}
+      args:
+        SERVICE_DIR: ${SIGNAL_SERVICE_DIR:-arcade-signal}
+        SERVICE_BINARY: ${SIGNAL_SERVICE_BINARY:-signal}
+    platform: linux/amd64
+    environment:
+      SIGNAL_ADDR: ${SIGNAL_ADDR:-:8000}
+      SIGNAL_STATIC_DIR: /app/static
+      SIGNAL_LOG_LEVEL: ${SIGNAL_LOG_LEVEL:-info}
+      SIGNAL_AUTH_TOKEN: ${SIGNAL_AUTH_TOKEN:-}
+      SIGNAL_ALLOWED_ORIGINS: ${SIGNAL_ALLOWED_ORIGINS:-}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      interval: 20s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    ports:
+      - "${SIGNAL_HOST_PORT:-${SIGNAL_PORT:-8000}}:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
+        reservations:
+          cpus: "0.25"
+          memory: "256M"
+    networks:
+      - arcade
+
+  worker:
+    image: ${WORKER_IMAGE:-cloud-arcade/worker:latest}
+    build:
+      context: ${WORKER_BUILD_CONTEXT:-..}
+      dockerfile: ${WORKER_DOCKERFILE:-deploy/dockerfiles/worker.Dockerfile}
+      args:
+        SERVICE_DIR: ${WORKER_SERVICE_DIR:-arcade-worker}
+        SERVICE_BINARY: ${WORKER_SERVICE_BINARY:-worker}
+    platform: linux/amd64
+    environment:
+      WORKER_SIGNAL_URL: ${WORKER_SIGNAL_URL:-ws://signal:8000/wws}
+      WORKER_SIGNAL_TOKEN: ${WORKER_SIGNAL_TOKEN:-}
+      WORKER_HEALTH_ADDR: ${WORKER_HEALTH_ADDR:-:8081}
+      WORKER_LOG_LEVEL: ${WORKER_LOG_LEVEL:-info}
+    networks:
+      - arcade
+    depends_on:
+      signal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/healthz || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "4G"
+        reservations:
+          cpus: "0.5"
+          memory: "1G"
+
+  portal:
+    image: ${PORTAL_IMAGE:-cloud-arcade/portal:latest}
+    build:
+      context: ${PORTAL_BUILD_CONTEXT:-..}
+      dockerfile: deploy/dockerfiles/portal.Dockerfile
+      args:
+        REACT_APP_SIGNALING_URL: ${REACT_APP_SIGNALING_URL:-/ws}
+        REACT_APP_SIGNALING_TOKEN: ${REACT_APP_SIGNALING_TOKEN:-}
+        SIGNAL_BACKEND_HOST: ${PORTAL_SIGNAL_BACKEND:-signal}
+    depends_on:
+      signal:
+        condition: service_healthy
+    environment:
+      PORT: ${PORTAL_PORT:-80}
+    ports:
+      - "${PORTAL_PORT:-8080}:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/healthz || exit 1"]
+      interval: 20s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512M"
+        reservations:
+          cpus: "0.1"
+          memory: "128M"
+    networks:
+      - arcade
+
+networks:
+  arcade:
+    name: ${CONTAINER_NETWORK:-cloud-arcade}
+    driver: bridge

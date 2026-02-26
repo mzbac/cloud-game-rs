@@ -1,0 +1,214 @@
+.site-card-wrapper {
+  min-height: 100vh;
+  padding: 18px 14px;
+  padding-top: calc(18px + env(safe-area-inset-top));
+  padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle at 25% 0%, rgba(39, 50, 87, 0.92) 0%, rgba(11, 15, 26, 0.95) 60%,
+      rgba(7, 9, 19, 0.98) 100%),
+    linear-gradient(180deg, rgba(7, 9, 19, 0.35) 0%, rgba(7, 9, 19, 0.92) 78%, rgba(7, 9, 19, 1) 100%),
+    url("./assets/ui/home-hero.webp");
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+}
+
+.arcadeCard {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.arcadeCardItem {
+  min-width: 0;
+  flex: 1 1 232px;
+  max-width: 320px;
+  animation: fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.arcadeCardItem:nth-child(1) {
+  animation-delay: 0.05s;
+}
+
+.arcadeCardItem:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.arcadeCardItem:nth-child(3) {
+  animation-delay: 0.15s;
+}
+
+.arcadeCardItem:nth-child(4) {
+  animation-delay: 0.2s;
+}
+
+.arcadeCardItem:nth-child(5) {
+  animation-delay: 0.25s;
+}
+
+.arcadeCardItem:nth-child(6) {
+  animation-delay: 0.3s;
+}
+
+.arcadeCardItemFull {
+  max-width: 100%;
+  flex-basis: 100%;
+}
+
+.arcadeCard .gameCard {
+  width: 100%;
+}
+
+.homeHeader {
+  max-width: 1200px;
+  margin: 0 auto 14px;
+  color: rgba(255, 255, 255, 0.92);
+  padding: 14px 14px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(6, 8, 16, 0.55);
+  backdrop-filter: blur(14px);
+}
+
+.homeHeaderTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.homeTitle {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.homeSubtitle {
+  opacity: 0.78;
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.homeStats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.homeStatPill {
+  border: 1px solid rgba(147, 222, 255, 0.2);
+  background: rgba(13, 29, 56, 0.6);
+  color: rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  backdrop-filter: blur(14px);
+  transition: all 0.3s ease;
+}
+
+.homeStatPill:hover {
+  background: rgba(13, 29, 56, 0.8);
+  border-color: rgba(147, 222, 255, 0.5);
+  box-shadow: 0 0 15px rgba(147, 222, 255, 0.2);
+}
+
+.homeLoading {
+  padding: 30px 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.gameCard {
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.gameCard.ant-card {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(6, 8, 16, 0.72);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.gameCard.ant-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(147, 222, 255, 0.4);
+  box-shadow: 0 22px 60px rgba(147, 222, 255, 0.15), 0 10px 20px rgba(0, 0, 0, 0.3);
+}
+
+.gameCard .ant-card-meta-title,
+.gameCard .ant-card-meta-description {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.gameCard .ant-card-meta-description {
+  opacity: 0.78;
+}
+
+.gameCardBody {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gameCardBody .ant-card-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.gameCardShare.ant-btn {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.gameCardShare.ant-btn:hover,
+.gameCardShare.ant-btn:focus {
+  color: rgba(255, 255, 255, 0.98);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.gameCard .ant-card-cover img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+@media (max-width: 520px) {
+  .site-card-wrapper {
+    padding: 14px 10px;
+    padding-top: calc(14px + env(safe-area-inset-top));
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .homeHeaderTop {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .homeStats {
+    justify-content: flex-start;
+  }
+}

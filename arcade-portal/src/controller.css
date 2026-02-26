@@ -1,0 +1,456 @@
+:root {
+  --controller-font: "Avenir Next", "Segoe UI", "SF Pro Text", sans-serif;
+  --controller-text: #e8f1ff;
+  --controller-text-soft: #9db5d7;
+  --controller-shell: rgba(7, 20, 40, 0.88);
+  --controller-border: rgba(154, 222, 255, 0.24);
+  --controller-shadow: 0 12px 34px rgba(0, 0, 0, 0.32);
+}
+
+.ControllerPage {
+  min-height: 100vh;
+  font-family: var(--controller-font);
+  color: var(--controller-text);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(38, 232, 255, 0.19) 0%, rgba(38, 232, 255, 0) 40%),
+    radial-gradient(circle at 84% 10%, rgba(184, 255, 45, 0.13) 0%, rgba(184, 255, 45, 0) 42%),
+    linear-gradient(155deg, rgba(5, 16, 34, 0.9) 0%, rgba(4, 10, 22, 0.95) 100%),
+    url("./assets/controller/controller-bg-v2.png");
+  background-size: cover;
+  background-position: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.ControllerPage__overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(3, 9, 19, 0.1) 0%, rgba(3, 9, 19, 0.48) 100%);
+  pointer-events: none;
+}
+
+.ControllerShell {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  left: max(8px, env(safe-area-inset-left));
+  right: max(8px, env(safe-area-inset-right));
+  z-index: 1002;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.ControllerPage--modalOpen .ControllerShell {
+  opacity: 0.55;
+  filter: blur(1.5px);
+}
+
+.ControllerHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: auto;
+}
+
+.ControllerHeader__title {
+  font-size: clamp(18px, 2.4vw, 26px);
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.ControllerHeader__subtitle {
+  font-size: clamp(11px, 1.4vw, 14px);
+  color: var(--controller-text-soft);
+}
+
+.ControllerPairCard {
+  width: min(520px, 100%);
+  border-radius: 14px;
+  background:
+    linear-gradient(155deg, var(--controller-shell) 0%, rgba(7, 16, 32, 0.9) 100%),
+    url("./assets/controller/panel-texture.png");
+  background-size: cover;
+  border: 1px solid var(--controller-border);
+  box-shadow: var(--controller-shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: auto;
+  backdrop-filter: blur(10px);
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.ControllerPairCard--collapsed {
+  width: min(360px, 100%);
+  gap: 8px;
+  padding: 10px;
+}
+
+.ControllerStatusRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ControllerPairCard__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.ControllerPairCard__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ControllerCodeInput {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(173, 224, 255, 0.33);
+  background: rgba(6, 16, 32, 0.86);
+  color: var(--controller-text);
+  padding: 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.ControllerCodeInput:focus {
+  outline: none;
+  border-color: rgba(38, 232, 255, 0.75);
+  box-shadow: 0 0 0 2px rgba(38, 232, 255, 0.16);
+}
+
+@keyframes gradientPulse {
+  0% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.ControllerPairButton {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(184, 255, 45, 0.52);
+  padding: 0 14px;
+  color: #081014;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  background: linear-gradient(135deg, #c9ff48 0%, #9feb26 50%, #d4ff70 100%);
+  background-size: 200% 200%;
+  touch-action: manipulation;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.ControllerPairButton:hover {
+  animation: gradientPulse 2s ease infinite;
+  box-shadow: 0 0 15px rgba(184, 255, 45, 0.4);
+}
+
+.ControllerPairButton:active {
+  transform: translateY(1px) scale(0.99);
+  box-shadow: 0 0 0 2px rgba(184, 255, 45, 0.22);
+}
+
+.ControllerSecondaryButton {
+  min-height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(171, 223, 255, 0.36);
+  background: rgba(13, 29, 56, 0.78);
+  color: var(--controller-text);
+  padding: 0 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  touch-action: manipulation;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.ControllerSecondaryButton:active {
+  transform: translateY(1px) scale(0.99);
+  border-color: rgba(38, 232, 255, 0.68);
+  box-shadow: 0 0 0 2px rgba(38, 232, 255, 0.14);
+}
+
+.ControllerHudToggle {
+  min-height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(171, 223, 255, 0.32);
+  background: rgba(6, 16, 32, 0.78);
+  color: rgba(232, 241, 255, 0.92);
+  padding: 0 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.ControllerStatus {
+  min-height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.ControllerStatus--idle {
+  background: rgba(157, 181, 215, 0.13);
+  border: 1px solid rgba(157, 181, 215, 0.26);
+  color: #c3d6f1;
+}
+
+.ControllerStatus--pairing {
+  background: rgba(38, 232, 255, 0.13);
+  border: 1px solid rgba(38, 232, 255, 0.36);
+  color: #b7f6ff;
+}
+
+.ControllerStatus--paired {
+  background: rgba(96, 241, 126, 0.14);
+  border: 1px solid rgba(96, 241, 126, 0.4);
+  color: #c9ffd5;
+}
+
+.ControllerStatus--error,
+.ControllerStatus--disconnected {
+  background: rgba(255, 103, 119, 0.16);
+  border: 1px solid rgba(255, 103, 119, 0.41);
+  color: #ffd1d7;
+}
+
+.ControllerModalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: rgba(2, 8, 18, 0.7);
+  backdrop-filter: blur(10px);
+}
+
+.ControllerModal {
+  position: fixed;
+  z-index: 1501;
+  left: max(10px, env(safe-area-inset-left));
+  right: max(10px, env(safe-area-inset-right));
+  top: max(10px, env(safe-area-inset-top));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  margin: 0 auto;
+  width: min(720px, 100%);
+  border-radius: 14px;
+  background:
+    linear-gradient(155deg, rgba(7, 21, 41, 0.94) 0%, rgba(5, 14, 28, 0.92) 100%),
+    url("./assets/controller/panel-texture.png");
+  background-size: cover;
+  border: 1px solid rgba(154, 222, 255, 0.24);
+  box-shadow: var(--controller-shadow);
+  padding: 12px 12px 14px;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.ControllerModal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ControllerModal__title {
+  font-size: clamp(16px, 2.1vw, 18px);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.ControllerModal__close {
+  min-height: 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(171, 223, 255, 0.28);
+  background: rgba(6, 16, 32, 0.75);
+  color: rgba(232, 241, 255, 0.92);
+  padding: 0 14px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.ControllerModal__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ControllerRemapPanel__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
+  flex: 1;
+  min-height: 0;
+  border-radius: 12px;
+  background: rgba(2, 8, 18, 0.22);
+  border: 1px solid rgba(154, 222, 255, 0.14);
+  padding: 10px;
+  scrollbar-gutter: stable;
+  scrollbar-color: rgba(154, 222, 255, 0.22) transparent;
+}
+
+.ControllerRemapPanel__grid::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ControllerRemapPanel__grid::-webkit-scrollbar-thumb {
+  background: rgba(154, 222, 255, 0.22);
+  border-radius: 999px;
+  border: 2px solid rgba(2, 8, 18, 0.2);
+}
+
+.ControllerRemapPanel__grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ControllerRemapRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 10px;
+  background: rgba(13, 30, 58, 0.85);
+  border: 1px solid rgba(172, 224, 255, 0.3);
+  padding: 8px;
+  transition: all 0.2s ease;
+}
+
+.ControllerRemapRow:hover {
+  background: rgba(20, 45, 80, 0.9);
+  border-color: rgba(172, 224, 255, 0.6);
+  box-shadow: 0 0 12px rgba(172, 224, 255, 0.15);
+}
+
+.ControllerRemapRow__label {
+  font-size: 12px;
+  color: #c7dcf6;
+}
+
+.ControllerRemapRow__select {
+  min-height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(171, 223, 255, 0.36);
+  background: rgba(6, 16, 32, 0.92);
+  color: var(--controller-text);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.ControllerRotateGate {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(2, 8, 18, 0.88);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 24px;
+}
+
+.ControllerRotateGate__title {
+  font-size: clamp(24px, 6vw, 34px);
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+
+.ControllerRotateGate__body {
+  font-size: clamp(14px, 4vw, 18px);
+  color: var(--controller-text-soft);
+  max-width: 420px;
+}
+
+.ControllerRotateGate__button {
+  margin-top: 4px;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(184, 255, 45, 0.58);
+  padding: 0 16px;
+  color: #081014;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  background: linear-gradient(135deg, #c9ff48 0%, #9feb26 100%);
+  touch-action: manipulation;
+}
+
+@media (min-width: 980px) and (orientation: landscape) {
+  .ControllerShell {
+    width: min(980px, calc(100vw - 16px));
+    right: auto;
+  }
+
+  .ControllerHeader {
+    width: min(560px, 100%);
+  }
+
+  .ControllerPairCard {
+    width: min(560px, 100%);
+  }
+
+  .ControllerPairCard--collapsed {
+    width: min(420px, 100%);
+  }
+
+  .ControllerModal {
+    width: min(820px, 100%);
+  }
+}
+
+@media (max-height: 520px) and (orientation: landscape) {
+  .ControllerShell {
+    top: max(4px, env(safe-area-inset-top));
+    gap: 6px;
+  }
+
+  .ControllerPairCard {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .ControllerModal {
+    padding: 10px;
+  }
+
+  .ControllerRemapPanel__grid {
+    padding: 8px;
+  }
+}
+
+@media (max-width: 620px) {
+  .ControllerPairCard__row {
+    grid-template-columns: 1fr;
+  }
+
+  .ControllerPairButton {
+    width: 100%;
+  }
+
+  .ControllerRemapPanel__grid {
+    grid-template-columns: 1fr;
+  }
+}

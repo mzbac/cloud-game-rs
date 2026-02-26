@@ -1,0 +1,19 @@
+[package]
+name = "arcade-signal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arcade-signal-protocol = { path = "../arcade-signal-protocol" }
+axum = { version = "0.7", features = ["ws", "tokio"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.5", features = ["fs"] }
+
+[[bin]]
+name = "signal"
+path = "src/main.rs"
