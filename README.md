@@ -79,4 +79,28 @@ cd deploy
 ```
 
 ## Architecture Diagram
-![Cloud-arcade-webrtc](https://github.com/mzbac/cloud-arcade/blob/master/Cloud-arcade%20webrtc.png)
+```mermaid
+flowchart LR
+  subgraph Clients
+    Browser["TV / Browser Player"]
+    Phone["Phone Controller (optional)"]
+  end
+
+  subgraph Stack["Cloud Arcade Stack"]
+    Portal["arcade-portal<br/>(React UI + Nginx)"]
+    Signal["arcade-signal<br/>(Rust signaling server)"]
+    Worker["arcade-worker<br/>(Rust WebRTC + emulator)"]
+    Games["ROM + libretro core assets"]
+  end
+
+  Browser -->|"HTTP :8080"| Portal
+  Phone -->|"HTTP :8080/controller/:code"| Portal
+  Browser -->|"WebSocket /ws"| Portal
+  Phone -->|"WebSocket /ws"| Portal
+  Portal -->|"Proxy to signal /ws"| Signal
+  Worker -->|"WebSocket /wws"| Signal
+  Signal -. "offer / answer / ICE candidate exchange" .- Browser
+  Signal -. "offer / answer / ICE candidate exchange" .- Worker
+  Browser <-->|"WebRTC game video/audio + input"| Worker
+  Worker -->|"Loads and runs"| Games
+```
