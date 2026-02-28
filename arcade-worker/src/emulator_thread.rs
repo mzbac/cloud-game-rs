@@ -10,6 +10,7 @@ use crate::room::{InputEvent, Room};
 
 pub(crate) fn spawn_emulator_thread(mut core: Core, fps: f64, input_receiver: Receiver<InputEvent>, room: Arc<Room>) {
     let tick = Duration::from_secs_f64(1.0 / fps.max(1.0));
+    let idle_tick = Duration::from_millis(50);
     thread::spawn(move || loop {
         while let Ok(input) = input_receiver.try_recv() {
             if let Some(player) = room.player_index_for_session(&input.session_id) {
@@ -26,6 +27,11 @@ pub(crate) fn spawn_emulator_thread(mut core: Core, fps: f64, input_receiver: Re
             }
         }
 
+        if !room.has_video_sessions() {
+            thread::sleep(idle_tick);
+            continue;
+        }
+
         let start = Instant::now();
         if let Err(err) = core.run_once() {
             error!(error = %err, "core run_once failed");
@@ -37,4 +43,3 @@ pub(crate) fn spawn_emulator_thread(mut core: Core, fps: f64, input_receiver: Re
         }
     });
 }
-

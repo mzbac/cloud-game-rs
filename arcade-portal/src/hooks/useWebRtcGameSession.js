@@ -13,6 +13,25 @@ const READY_ICE_STATES = new Set(["connected", "completed"]);
 const RTC_DATA_CHANNEL_BACKPRESSURE_LIMIT = 96 * 1024;
 const GAMEPAD_AXIS_THRESHOLD = 0.5;
 
+const shouldExposeWebRtcDebug = () => {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const hostname = window.location?.hostname || "";
+  const isLocalhost =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]";
+  if (!isLocalhost) {
+    return false;
+  }
+
+  const params = new URLSearchParams(window.location?.search || "");
+  return params.has("webrtcDebug") || params.has("webrtcStats");
+};
+
 const getConnectedGamepads = () => {
   if (typeof navigator === "undefined") {
     return [];
@@ -123,6 +142,18 @@ export const useWebRtcGameSession = ({
     setVideoStalled(false);
     setAudioStatus("unknown");
     setConnectionState(pc.connectionState || "new");
+
+    const exposeDebug = shouldExposeWebRtcDebug();
+    if (exposeDebug) {
+      window.__cloudArcadeWebRtc = {
+        pc,
+        getStats: async () => {
+          const report = await pc.getStats();
+          return Array.from(report.values());
+        },
+        getRemoteVideo: () => remoteVideoRef.current,
+      };
+    }
 
     let inputChannel;
     let audioChannel;
@@ -366,6 +397,10 @@ export const useWebRtcGameSession = ({
     document.addEventListener("touchstart", resumeAudioFromGesture);
 
     return () => {
+      if (exposeDebug && window.__cloudArcadeWebRtc?.pc === pc) {
+        delete window.__cloudArcadeWebRtc;
+      }
+
       stopInputLoop();
       stopVideoStallDetector();
       if (conn?.readyState === WebSocket.OPEN) {
