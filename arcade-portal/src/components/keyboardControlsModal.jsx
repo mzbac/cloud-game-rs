@@ -89,7 +89,7 @@ function KeyboardControlsModal({
 
   return (
     <Modal
-      visible={open}
+      open={open}
       title="Keyboard controls"
       onCancel={onClose}
       getContainer={getContainer}

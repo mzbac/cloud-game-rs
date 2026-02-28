@@ -3,9 +3,8 @@
 FROM --platform=$BUILDPLATFORM docker.io/library/node:20-alpine AS build
 WORKDIR /app
 
-ENV NODE_ENV=production
+ENV NODE_ENV=development
 ENV GENERATE_SOURCEMAP=false
-ENV NODE_OPTIONS=--openssl-legacy-provider
 
 COPY arcade-portal/package.json arcade-portal/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts

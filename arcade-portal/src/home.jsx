@@ -4,7 +4,7 @@ import { ShareAltOutlined } from "@ant-design/icons";
 import coverArt from "./assets/ui/game-card-cover.webp";
 import "./home.css";
 import { AppDataContext } from "./store";
-import { useHistory } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { shareUrl } from "./utils/share";
 import { parsePlayerCount } from "./utils/playerCount";
 
@@ -12,7 +12,7 @@ const { Meta } = Card;
 function Home() {
   const { state } = useContext(AppDataContext);
   const { games, playerCountsByRoom } = state;
-  const history = useHistory();
+  const navigate = useNavigate();
   const isGamesLoaded = games !== undefined;
   const safePlayerCountsByRoom =
     playerCountsByRoom && typeof playerCountsByRoom === "object"
@@ -50,7 +50,7 @@ function Home() {
                 <div className="arcadeCardItem" key={roomId}>
                   <Card
                     className="gameCard"
-                    onClick={() => history.push(`/game/${roomId}`)}
+                    onClick={() => navigate(`/game/${roomId}`)}
                     hoverable
                     cover={<img alt="Arcade cover art" src={coverArt} loading="lazy" />}
                   >

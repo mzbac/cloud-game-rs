@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useContext, useRef, useState } from "react";
 import { Button, Space, Tooltip, message } from "antd";
 import { AppDataContext } from "./store";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import Icon from "@ant-design/icons";
 import QRCode from "qrcode";
 import {
@@ -19,7 +19,6 @@ import Keyboard from "./components/keyboard";
 import KeyboardControlsModal from "./components/keyboardControlsModal";
 import GamepadControlsModal from "./components/gamepadControlsModal";
 import TouchControls from "./components/touchControls";
-import { useHistory } from "react-router-dom";
 import { useWebRtcGameSession } from "./hooks/useWebRtcGameSession";
 import { usePhoneControllerHost } from "./hooks/usePhoneControllerHost";
 
@@ -297,7 +296,7 @@ const loadGamepadMappingFromStorage = () => {
 };
 
 function App() {
-  const history = useHistory();
+  const navigate = useNavigate();
   const isTouchDevice =
     typeof window !== "undefined" &&
     ((window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ||
@@ -626,7 +625,7 @@ function App() {
           type="text"
           className="GameHeader__back"
           icon={<ArrowLeftOutlined />}
-          onClick={() => history.push("/")}
+          onClick={() => navigate("/")}
         />
         <div className="GameHeader__title">
           <div className="GameHeader__name">{gameTitle}</div>

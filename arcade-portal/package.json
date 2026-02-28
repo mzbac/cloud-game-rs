@@ -2,38 +2,31 @@
   "name": "arcade-portal",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "dependencies": {
-    "@testing-library/jest-dom": "^4.2.4",
-    "@testing-library/react": "^9.5.0",
-    "@testing-library/user-event": "^7.2.1",
-    "antd": "^4.4.2",
-    "playwright": "^1.58.2",
+    "@ant-design/icons": "^6.1.0",
+    "antd": "^6.3.1",
     "qrcode": "^1.5.4",
-    "react": "^16.13.1",
-    "react-dom": "^16.13.1",
-    "react-router-dom": "^5.2.0",
-    "react-scripts": "3.4.1",
-    "rxjs": "^6.6.0"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.1",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@vitejs/plugin-react": "^5.1.4",
+    "jsdom": "^28.1.0",
+    "playwright": "^1.58.2",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18"
   },
   "scripts": {
-    "start": "PORT=8000 react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  },
-  "eslintConfig": {
-    "extends": "react-app"
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+    "start": "vite --host 0.0.0.0 --port 8000",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 8000",
+    "test": "vitest run"
   }
 }

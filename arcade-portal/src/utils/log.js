@@ -1,4 +1,5 @@
-const IS_DEV = process.env.NODE_ENV !== "production";
+const IS_DEV =
+  import.meta?.env ? Boolean(import.meta.env.DEV) : process.env.NODE_ENV !== "production";
 
 export const logInfo = (...args) => {
   if (IS_DEV) {
@@ -17,4 +18,3 @@ export const logError = (...args) => {
     console.error(...args);
   }
 };
-

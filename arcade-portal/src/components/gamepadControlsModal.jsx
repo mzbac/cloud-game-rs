@@ -196,7 +196,7 @@ function GamepadControlsModal({
 
   return (
     <Modal
-      visible={open}
+      open={open}
       title="Controller controls"
       onCancel={onClose}
       getContainer={getContainer}
@@ -280,4 +280,3 @@ function GamepadControlsModal({
 }
 
 export default GamepadControlsModal;
-

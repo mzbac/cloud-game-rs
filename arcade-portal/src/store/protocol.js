@@ -29,8 +29,20 @@ const normalizeSignalingPath = (rawPath) => {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 };
 
+const readEnv = (key) => {
+  if (typeof process !== "undefined" && process.env) {
+    return process.env[key];
+  }
+
+  if (import.meta?.env && Object.prototype.hasOwnProperty.call(import.meta.env, key)) {
+    return import.meta.env[key];
+  }
+
+  return undefined;
+};
+
 export const SIGNALING_PATH = normalizeSignalingPath(
-  process.env.REACT_APP_SIGNALING_PATH
+  readEnv("REACT_APP_SIGNALING_PATH")
 );
 const resolveWindowUrlFallback = () => {
   if (typeof window === "undefined" || !window.location) {
@@ -106,8 +118,11 @@ export const redactUrlQueryParamForLog = (rawUrl, key) => {
 };
 
 export const resolveSignalingUrl = () => {
-  const configured = process.env.REACT_APP_SIGNALING_URL?.trim();
-  const token = process.env.REACT_APP_SIGNALING_TOKEN?.trim();
+  const configuredRaw = readEnv("REACT_APP_SIGNALING_URL");
+  const tokenRaw = readEnv("REACT_APP_SIGNALING_TOKEN");
+
+  const configured = typeof configuredRaw === "string" ? configuredRaw.trim() : "";
+  const token = typeof tokenRaw === "string" ? tokenRaw.trim() : "";
 
   const baseUrl = (() => {
     if (!configured) {
