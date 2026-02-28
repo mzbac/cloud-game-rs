@@ -13,8 +13,9 @@ use worker::libretro::VideoFrame;
 use crate::room::Room;
 
 pub(crate) const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
+// WebKit/Safari rejects unconstrained Baseline (42001f) in SDP negotiation; use Constrained Baseline.
 pub(crate) const H264_SDP_FMTP_LINE: &str =
-    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f";
+    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f";
 
 const VIDEO_WIDTH_LIMIT: u32 = 960;
 const VIDEO_HEIGHT_LIMIT: u32 = 540;
@@ -878,4 +879,17 @@ fn scale_rgba_nearest(
     }
 
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn h264_sdp_fmtp_line_uses_constrained_baseline_profile() {
+        assert_eq!(
+            H264_SDP_FMTP_LINE,
+            "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+        );
+    }
 }
