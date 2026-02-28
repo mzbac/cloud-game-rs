@@ -32,21 +32,7 @@ export const createSignalConnection = ({
 
     const startHeartbeat = () => {
       heartbeatId = window.setInterval(() => {
-        if (nextSocket.readyState !== WebSocket.OPEN) {
-          return;
-        }
-
-        try {
-          nextSocket.send(
-            JSON.stringify({
-              id: SIGNALING_MESSAGE_IDS.GET_GAMES,
-            })
-          );
-        } catch (err) {
-          if (typeof logError === "function") {
-            logError("[signal] heartbeat failed", err);
-          }
-        }
+        requestGames();
       }, heartbeatMs);
     };
 
@@ -106,7 +92,26 @@ export const createSignalConnection = ({
       }
     };
 
+    const requestGames = () => {
+      if (nextSocket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      try {
+        nextSocket.send(
+          JSON.stringify({
+            id: SIGNALING_MESSAGE_IDS.GET_GAMES,
+          })
+        );
+      } catch (err) {
+        if (typeof logError === "function") {
+          logError("[signal] getGames send failed", err);
+        }
+      }
+    };
+
     const handleOpen = () => {
+      requestGames();
       startHeartbeat();
     };
 
