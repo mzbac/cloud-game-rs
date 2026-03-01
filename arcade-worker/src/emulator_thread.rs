@@ -4,7 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{error, warn};
 
-use worker::libretro::Core;
+use worker::Core;
 
 use crate::room::{InputEvent, Room};
 

@@ -5,6 +5,7 @@ import {
 } from "../store/protocol";
 import { controllerHostMessage } from "../store/signalingMessages";
 import { logWarn } from "../utils/log";
+import { ignoreError } from "../utils/ignore";
 
 const nextControllerUrl = (code, workerID) => {
   const safeWorkerID = typeof workerID === "string" ? workerID.trim() : "";
@@ -113,7 +114,9 @@ export const usePhoneControllerHost = ({ conn, workerID, onEnableAudio }) => {
           pairingCodeRef.current = code;
           setPairingCode(code);
           setControllerUrl(nextControllerUrl(code, workerID));
-        } catch {}
+        } catch (err) {
+          ignoreError("[controller-host] failed to parse controllerReady payload", err);
+        }
         return;
       }
 

@@ -1,25 +1,6 @@
-export const SIGNALING_MESSAGE_IDS = Object.freeze({
-  GAMES: "games",
-  UPDATE_PLAYER_COUNT: "updatePlayerCount",
-  SESSION_READY: "sessionReady",
-  INIT_WEBRTC: "initwebrtc",
-  OFFER: "offer",
-  ANSWER: "answer",
-  CANDIDATE: "candidate",
-  JOIN_ROOM: "joinRoom",
-  TERMINATE_SESSION: "terminateSession",
-  GAME_INFO: "gameInfo",
-  GET_GAMES: "getGames",
-  INPUT: "input",
-  CONTROLLER_HOST: "controllerHost",
-  CONTROLLER_READY: "controllerReady",
-  CONTROLLER_JOIN: "controllerJoin",
-  CONTROLLER_JOINED: "controllerJoined",
-  CONTROLLER_LEFT: "controllerLeft",
-  CONTROLLER_REJECTED: "controllerRejected",
-  CONTROLLER_INPUT: "controllerInput",
-  CONTROLLER_AUDIO: "controllerAudio",
-});
+import { SIGNALING_MESSAGE_IDS } from "./generatedMessageIds";
+
+export { SIGNALING_MESSAGE_IDS };
 
 const normalizeSignalingPath = (rawPath) => {
   const trimmed = typeof rawPath === "string" ? rawPath.trim() : "";

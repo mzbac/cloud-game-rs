@@ -16,7 +16,7 @@ use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
-use arcade_signal_protocol::{ids as signal_ids, SignalMessage};
+use arcade_signal_protocol::{audio as audio_proto, ids as signal_ids, SignalMessage};
 use crate::room_state::{PendingInputs, PlayerSlots};
 use crate::video_sender;
 
@@ -498,7 +498,12 @@ impl Room {
         }
 
         let sample_rate = self.audio_sample_rate.load(Ordering::Relaxed);
-        let payload = format!("audio-pcm16le|sr={sample_rate}|{encoded}");
+        let payload = format!(
+            "{}|v={}|sr={sample_rate}|ch={}|{encoded}",
+            audio_proto::KIND,
+            audio_proto::VERSION,
+            audio_proto::CHANNELS
+        );
         for session in sessions {
             let channel = session.audio_channel().clone();
             let payload = payload.clone();

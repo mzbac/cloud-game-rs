@@ -10,7 +10,9 @@ export const copyTextToClipboard = async (text) => {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch {}
+  } catch {
+    // Ignore: clipboard access may be blocked by permissions/user gesture rules.
+  }
 
   try {
     const textarea = document.createElement("textarea");
@@ -44,7 +46,9 @@ export const shareUrl = async ({ title, url }) => {
       await navigator.share({ title, url });
       return;
     }
-  } catch {}
+  } catch {
+    // Ignore: share sheet may be blocked/cancelled; we'll fall back to copy/info.
+  }
 
   const copied = await copyTextToClipboard(url);
   if (copied) {
@@ -54,4 +58,3 @@ export const shareUrl = async ({ title, url }) => {
 
   message.info(url);
 };
-

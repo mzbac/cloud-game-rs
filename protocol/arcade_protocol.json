@@ -1,0 +1,34 @@
+{
+  "signalingMessageIds": {
+    "GAMES": "games",
+    "GET_GAMES": "getGames",
+    "GAME_INFO": "gameInfo",
+    "UPDATE_PLAYER_COUNT": "updatePlayerCount",
+    "INIT_WEBRTC": "initwebrtc",
+    "OFFER": "offer",
+    "ANSWER": "answer",
+    "CANDIDATE": "candidate",
+    "JOIN_ROOM": "joinRoom",
+    "TERMINATE_SESSION": "terminateSession",
+    "INPUT": "input",
+    "CONTROLLER_HOST": "controllerHost",
+    "CONTROLLER_READY": "controllerReady",
+    "CONTROLLER_JOIN": "controllerJoin",
+    "CONTROLLER_JOINED": "controllerJoined",
+    "CONTROLLER_LEFT": "controllerLeft",
+    "CONTROLLER_REJECTED": "controllerRejected",
+    "CONTROLLER_INPUT": "controllerInput",
+    "CONTROLLER_AUDIO": "controllerAudio"
+  },
+  "rtcDataChannelLabels": {
+    "GAME_INPUT": "game-input",
+    "GAME_AUDIO": "game-audio"
+  },
+  "gameAudioPacketSpec": {
+    "KIND": "audio",
+    "VERSION": 1,
+    "SAMPLE_FORMAT": "pcm_s16le",
+    "CHANNELS": 2,
+    "ENCODING": "base64"
+  }
+}

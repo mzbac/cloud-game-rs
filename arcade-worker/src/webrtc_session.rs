@@ -27,7 +27,7 @@ use webrtc::rtp_transceiver::{
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
 
-use arcade_signal_protocol::{ids as signal_ids, SignalMessage};
+use arcade_signal_protocol::{ids as signal_ids, rtc as rtc_labels, SignalMessage};
 use crate::room::{InputEvent, Room, Session, VideoSampleQueue};
 use crate::video_sender;
 
@@ -271,11 +271,11 @@ pub(crate) async fn create_session(
     });
 
     let data_input_channel = peer
-        .create_data_channel("game-input", unreliable_channel_opts.clone())
+        .create_data_channel(rtc_labels::GAME_INPUT, unreliable_channel_opts.clone())
         .await
         .map_err(|err| format!("create data channel failed: {err:?}"))?;
     let audio_channel = peer
-        .create_data_channel("game-audio", unreliable_channel_opts)
+        .create_data_channel(rtc_labels::GAME_AUDIO, unreliable_channel_opts)
         .await
         .map_err(|err| format!("create audio channel failed: {err:?}"))?;
 

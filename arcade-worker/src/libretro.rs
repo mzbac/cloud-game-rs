@@ -943,8 +943,6 @@ impl Core {
         self
     }
 
-    pub fn set_pixel_format(&self) {}
-
     pub fn initialize(&mut self, callbacks: Option<CoreCallbacks>) -> Result<EmulatorMetadata, LibretroError> {
         self.set_callbacks(callbacks.unwrap_or_default())?;
         ACTIVE_CONTEXT.store(Arc::as_ptr(&self.context) as *mut _, Ordering::Release);

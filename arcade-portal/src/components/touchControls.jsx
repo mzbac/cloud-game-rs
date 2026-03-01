@@ -33,7 +33,9 @@ function TouchButton({ label, className, buttonId, onButtonChange }) {
       pointerIdRef.current = event.pointerId;
       try {
         event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {}
+      } catch {
+        // Ignore: pointer capture isn't supported in all browsers/contexts.
+      }
 
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate(15);
@@ -219,7 +221,9 @@ function TouchControls({ enabled, mapping, labels, onButtonChange }) {
       stickPointerIdRef.current = event.pointerId;
       try {
         event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {}
+      } catch {
+        // Ignore: pointer capture isn't supported in all browsers/contexts.
+      }
       updateStickFromEvent(event);
     },
     [enabled, updateStickFromEvent]

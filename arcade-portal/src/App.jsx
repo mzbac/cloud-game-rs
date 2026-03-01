@@ -24,6 +24,7 @@ import { usePhoneControllerHost } from "./hooks/usePhoneControllerHost";
 
 import "./App.css";
 import { shareUrl } from "./utils/share";
+import { ignoreError, ignorePromiseRejection } from "./utils/ignore";
 import { writeJsonToLocalStorage } from "./utils/storage";
 import { parsePlayerCount } from "./utils/playerCount";
 
@@ -370,7 +371,9 @@ function App() {
       try {
         await root.requestFullscreen();
         return true;
-      } catch {}
+      } catch (err) {
+        ignoreError("[ui] requestFullscreen failed", err);
+      }
     }
 
     const video = remoteVideoRef.current;
@@ -382,14 +385,18 @@ function App() {
       try {
         await video.requestFullscreen();
         return true;
-      } catch {}
+      } catch (err) {
+        ignoreError("[ui] requestFullscreen failed", err);
+      }
     }
 
     if (typeof video.webkitEnterFullscreen === "function") {
       try {
         video.webkitEnterFullscreen();
         return true;
-      } catch {}
+      } catch (err) {
+        ignoreError("[ui] webkitEnterFullscreen failed", err);
+      }
     }
 
     return false;
@@ -399,7 +406,7 @@ function App() {
     const hasFullscreenElement = Boolean(document.fullscreenElement);
     if (hasFullscreenElement) {
       if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
+        ignorePromiseRejection(document.exitFullscreen(), "[ui] exitFullscreen failed");
       }
       return;
     }
@@ -585,7 +592,9 @@ function App() {
     if (isLandscapeLocked) {
       try {
         window.screen.orientation.unlock();
-      } catch {}
+      } catch (err) {
+        ignoreError("[ui] orientation.unlock failed", err);
+      }
       setIsLandscapeLocked(false);
       return;
     }
@@ -594,14 +603,18 @@ function App() {
       await window.screen.orientation.lock("landscape");
       setIsLandscapeLocked(true);
       return;
-    } catch {}
+    } catch (err) {
+      ignoreError("[ui] orientation.lock failed", err);
+    }
 
     if (!document.fullscreenElement) {
       const root = gameRootRef.current;
       if (root && typeof root.requestFullscreen === "function") {
         try {
           await root.requestFullscreen();
-        } catch {}
+        } catch (err) {
+          ignoreError("[ui] requestFullscreen failed", err);
+        }
       }
     }
 

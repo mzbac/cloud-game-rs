@@ -4,7 +4,7 @@ use super::video_sender::{fill_rgba_buffer_from_frame, h264_contains_idr};
 #[test]
 fn rgba_from_xrgb8888_converts_bgrx_to_rgba() {
     let frame = VideoFrame::new(
-        worker::libretro::RetroPixelFormat::Xrgb8888,
+        worker::RetroPixelFormat::Xrgb8888,
         2,
         1,
         8,
@@ -26,7 +26,7 @@ fn rgba_from_rgb565_converts_to_rgba() {
         data.extend_from_slice(&raw.to_le_bytes());
     }
 
-    let frame = VideoFrame::new(worker::libretro::RetroPixelFormat::Rgb565, 3, 1, 6, data);
+    let frame = VideoFrame::new(worker::RetroPixelFormat::Rgb565, 3, 1, 6, data);
 
     let mut out = Vec::new();
     assert!(fill_rgba_buffer_from_frame(&frame, &mut out).is_some());
@@ -47,7 +47,7 @@ fn rgba_from_rgb1555_converts_to_rgba() {
         data.extend_from_slice(&raw.to_le_bytes());
     }
 
-    let frame = VideoFrame::new(worker::libretro::RetroPixelFormat::Rgb1555, 3, 1, 6, data);
+    let frame = VideoFrame::new(worker::RetroPixelFormat::Rgb1555, 3, 1, 6, data);
 
     let mut out = Vec::new();
     assert!(fill_rgba_buffer_from_frame(&frame, &mut out).is_some());
@@ -64,7 +64,7 @@ fn rgba_from_rgb1555_converts_to_rgba() {
 #[test]
 fn rgba_from_frame_rejects_short_stride() {
     let frame = VideoFrame::new(
-        worker::libretro::RetroPixelFormat::Xrgb8888,
+        worker::RetroPixelFormat::Xrgb8888,
         1,
         2,
         4,

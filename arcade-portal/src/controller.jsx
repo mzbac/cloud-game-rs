@@ -8,6 +8,12 @@ import {
 import { controllerAudioMessage, controllerInputMessage, controllerJoinMessage } from "./store/signalingMessages";
 import TouchControls from "./components/touchControls";
 import "./controller.css";
+import { ignoreError } from "./utils/ignore";
+import {
+  safeLocalStorageGetItem,
+  safeLocalStorageSetItem,
+  writeJsonToLocalStorage,
+} from "./utils/storage";
 
 const ACTION_BITS = {
   A: 1 << 0,
@@ -96,29 +102,16 @@ const safeJoinCode = (value) =>
   typeof value === "string" ? value.trim().toUpperCase().slice(0, 12) : "";
 
 const loadLastJoinCodeFromStorage = () => {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return "";
-  }
-
-  try {
-    return safeJoinCode(window.localStorage.getItem(LAST_JOIN_CODE_STORAGE_KEY));
-  } catch {
-    return "";
-  }
+  const raw = safeLocalStorageGetItem(LAST_JOIN_CODE_STORAGE_KEY);
+  return safeJoinCode(raw);
 };
 
 const saveLastJoinCodeToStorage = (value) => {
-  if (typeof window === "undefined" || !window.localStorage) {
+  const normalized = safeJoinCode(value);
+  if (!normalized) {
     return;
   }
-
-  try {
-    const normalized = safeJoinCode(value);
-    if (!normalized) {
-      return;
-    }
-    window.localStorage.setItem(LAST_JOIN_CODE_STORAGE_KEY, normalized);
-  } catch {}
+  safeLocalStorageSetItem(LAST_JOIN_CODE_STORAGE_KEY, normalized);
 };
 
 const isPortraitOrientation = () => {
@@ -421,12 +414,7 @@ function ControllerPage() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.localStorage) {
-      return;
-    }
-    try {
-      window.localStorage.setItem(TOUCH_MAPPING_STORAGE_KEY, JSON.stringify(touchMapping));
-    } catch {}
+    writeJsonToLocalStorage(TOUCH_MAPPING_STORAGE_KEY, touchMapping);
   }, [touchMapping]);
 
   const updateMappingSlot = useCallback((slot, nextBit) => {
@@ -485,14 +473,18 @@ function ControllerPage() {
       if (root && typeof root.requestFullscreen === "function") {
         try {
           await root.requestFullscreen();
-        } catch {}
+        } catch (err) {
+          ignoreError("[controller] requestFullscreen failed", err);
+        }
       }
     }
 
     if (typeof window !== "undefined" && window.screen?.orientation?.lock) {
       try {
         await window.screen.orientation.lock("landscape");
-      } catch {}
+      } catch (err) {
+        ignoreError("[controller] orientation.lock failed", err);
+      }
     }
   }, []);
 

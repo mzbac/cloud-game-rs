@@ -15,6 +15,22 @@ export const safeLocalStorageSetItem = (key, value) => {
   }
 };
 
+export const safeLocalStorageGetItem = (key) => {
+  if (!key || typeof key !== "string") {
+    return null;
+  }
+
+  if (typeof window === "undefined" || !window.localStorage) {
+    return null;
+  }
+
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
 export const writeJsonToLocalStorage = (key, value) => {
   try {
     return safeLocalStorageSetItem(key, JSON.stringify(value));
@@ -22,4 +38,3 @@ export const writeJsonToLocalStorage = (key, value) => {
     return false;
   }
 };
-

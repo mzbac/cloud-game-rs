@@ -1,4 +1,5 @@
 import { logError, logWarn } from "../../utils/log";
+import { parseGameAudioPacket } from "./gameAudioPacket";
 
 const DEFAULT_AUDIO_SAMPLE_RATE = 48000;
 
@@ -31,12 +32,17 @@ const createAudioContext = (preferredSampleRate, setAudioStatus) => {
 };
 
 const decodeBase64 = (value) => {
-  const bytes = atob(value);
-  const out = new Uint8Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) {
-    out[i] = bytes.charCodeAt(i);
+  try {
+    const bytes = atob(value);
+    const out = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) {
+      out[i] = bytes.charCodeAt(i);
+    }
+    return out;
+  } catch (err) {
+    logWarn("[audio] failed to decode base64 payload", err);
+    return null;
   }
-  return out;
 };
 
 const decodeTextFromBytes = (bytes, decoder) => {
@@ -129,15 +135,21 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
     resumeAudioRef.current = resumeAudioFromGesture;
   }
 
-  const playAudioChunk = (encoded, sampleRate) => {
+  const playAudioChunk = (encoded, sampleRate, channels) => {
     if (!encoded || !audioContext) {
       return;
     }
     if (audioContext.state !== "running") {
       return;
     }
+    const decodedChannels =
+      Number.isFinite(channels) && channels > 0 && channels <= 2 ? channels : 2;
+
     const bytes = decodeBase64(encoded);
-    if (bytes.length === 0 || bytes.length % 2 !== 0) {
+    if (!bytes || bytes.length === 0 || bytes.length % 2 !== 0) {
+      return;
+    }
+    if (bytes.length % (decodedChannels * 2) !== 0) {
       return;
     }
     if (sampleRate && sampleRate !== audioSampleRate) {
@@ -145,21 +157,27 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
     }
 
     const samples = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.length / 2);
-    const frameCount = Math.floor(samples.length / 2);
+    const frameCount = Math.floor(samples.length / decodedChannels);
     if (frameCount === 0) {
       return;
     }
 
     const buffer = audioContext.createBuffer(
-      2,
+      decodedChannels,
       frameCount,
       sampleRate || audioContext.sampleRate
     );
-    const left = buffer.getChannelData(0);
-    const right = buffer.getChannelData(1);
+    const channelsOut = [];
+    for (let channel = 0; channel < decodedChannels; channel++) {
+      channelsOut.push(buffer.getChannelData(channel));
+    }
     for (let i = 0; i < frameCount; i++) {
-      left[i] = Math.max(-1, Math.min(1, samples[i * 2] / 32767));
-      right[i] = Math.max(-1, Math.min(1, samples[i * 2 + 1] / 32767));
+      for (let channel = 0; channel < decodedChannels; channel++) {
+        channelsOut[channel][i] = Math.max(
+          -1,
+          Math.min(1, samples[i * decodedChannels + channel] / 32767)
+        );
+      }
     }
 
     const source = audioContext.createBufferSource();
@@ -189,20 +207,14 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
       return;
     }
 
-    if (!raw || typeof raw !== "string" || !raw.startsWith("audio-pcm16le|")) {
+    const packet = parseGameAudioPacket(raw, audioSampleRate);
+    if (!packet) {
       return;
     }
-    const parts = raw.replace("audio-pcm16le|", "").split("|", 2);
-    if (parts.length < 2 || !parts[1]) {
-      return;
+    if (packet.sampleRate !== audioSampleRate) {
+      audioSampleRate = packet.sampleRate;
     }
-
-    const sampleRate = Number.parseInt(parts[0].replace("sr=", ""), 10);
-    const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : audioSampleRate;
-    if (rate !== audioSampleRate) {
-      audioSampleRate = rate;
-    }
-    playAudioChunk(parts[1], rate);
+    playAudioChunk(packet.encoded, packet.sampleRate, packet.channels);
   };
 
   const cleanup = () => {
@@ -222,4 +234,3 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
     cleanup,
   };
 };
-

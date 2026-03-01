@@ -7,7 +7,7 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use arcade_signal_protocol::SignalMessage;
-use worker::libretro::{AudioFrame, Core, CoreCallbacks, VideoFrame};
+use worker::{AudioFrame, Core, CoreCallbacks, VideoFrame};
 
 mod audio_sender;
 mod emulator_thread;

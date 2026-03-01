@@ -101,46 +101,15 @@ while (( "$#" > 0 )); do
       usage_error "unknown argument: $1"
       ;;
   esac
-done
-
-resolve_env_file_path() {
-  local candidate="$1"
-
-  if [[ -z "$candidate" ]]; then
-    printf '%s\n' "$candidate"
-    return
-  fi
-
-  if [[ "$candidate" == /* ]]; then
-    printf '%s\n' "$candidate"
-    return
-  fi
-
-  local base
-  for base in "$INVOKE_DIR" "$PROJECT_ROOT" "$SCRIPT_DIR"; do
-    if [[ -f "${base}/${candidate}" ]]; then
-      printf '%s\n' "${base}/${candidate}"
-      return
-    fi
-  done
-
-  printf '%s\n' "$candidate"
-}
-
-ENV_FILE="$(resolve_env_file_path "$ENV_FILE")"
-
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  source "$ENV_FILE"
-  set +a
-elif [[ "$ENV_FILE" != "${SCRIPT_DIR}/.env.native.example" ]]; then
-  echo "warning: env file not found: $ENV_FILE"
-  echo "continuing with defaults"
-fi
-
-: "${SIGNAL_SERVICE_DIR:=arcade-signal}"
-: "${SIGNAL_SERVICE_BINARY:=signal}"
-: "${WORKER_SERVICE_DIR:=arcade-worker}"
+	done
+	
+	source "${SCRIPT_DIR}/lib/env_file.sh"
+	ENV_FILE="$(arcade_resolve_env_file_path "$ENV_FILE" "$INVOKE_DIR" "$PROJECT_ROOT" "$SCRIPT_DIR")"
+	arcade_load_env_file "$ENV_FILE" "${SCRIPT_DIR}/.env.native.example"
+	
+	: "${SIGNAL_SERVICE_DIR:=arcade-signal}"
+	: "${SIGNAL_SERVICE_BINARY:=signal}"
+	: "${WORKER_SERVICE_DIR:=arcade-worker}"
 : "${WORKER_SERVICE_BINARY:=worker}"
 : "${SIGNAL_ADDR:=:8000}"
 : "${SIGNAL_HOST_PORT:=}"

@@ -7,15 +7,18 @@
 //! - load and run a game
 //! - optional serialize/unserialize/snapshot handling
 
-pub mod libretro;
+mod libretro;
 
 pub use libretro::{
+    AudioFrame,
     Core,
     CoreCallbacks,
     EmulatorMetadata,
     FrameTiming,
     GameGeometry,
     LibretroError,
+    RetroPixelFormat,
+    VideoFrame,
 };
 
 pub type Result<T, E = LibretroError> = std::result::Result<T, E>;

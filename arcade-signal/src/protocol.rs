@@ -134,7 +134,7 @@ pub fn parse_browser_command(req: SignalMessage) -> Result<BrowserCommand, Proto
     } = req;
 
     match id.as_str() {
-        signal_ids::GET_GAMES | signal_ids::UPDATE => Ok(BrowserCommand::RequestGames),
+        signal_ids::GET_GAMES => Ok(BrowserCommand::RequestGames),
         signal_ids::INIT_WEBRTC => Ok(BrowserCommand::ForwardToWorker {
             worker_id: required_target(&id, target_id)?,
             event: WorkerEventKind::InitWebrtc,

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::thread;
 
-use worker::libretro::AudioFrame;
+use worker::AudioFrame;
 
 use crate::room::Room;
 

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, warn};
-use worker::libretro::VideoFrame;
+use worker::{RetroPixelFormat, VideoFrame};
 
 use crate::room::Room;
 
@@ -710,7 +710,7 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
     let out_len = width.checked_mul(height)?.checked_mul(4)?;
     out.resize(out_len, 0);
     match frame.format() {
-        worker::libretro::RetroPixelFormat::Xrgb8888 => {
+        RetroPixelFormat::Xrgb8888 => {
             let expected_row_bytes = width.checked_mul(4)?;
             for y in 0..height {
                 let row_start = y.checked_mul(pitch)?;
@@ -730,7 +730,7 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
             }
             Some(())
         }
-        worker::libretro::RetroPixelFormat::Rgb565 => {
+        RetroPixelFormat::Rgb565 => {
             let expected_row_bytes = width.checked_mul(2)?;
             for y in 0..height {
                 let row_start = y.checked_mul(pitch)?;
@@ -757,7 +757,7 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
             }
             Some(())
         }
-        worker::libretro::RetroPixelFormat::Rgb1555 => {
+        RetroPixelFormat::Rgb1555 => {
             let expected_row_bytes = width.checked_mul(2)?;
             for y in 0..height {
                 let row_start = y.checked_mul(pitch)?;
@@ -784,7 +784,7 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
             }
             Some(())
         }
-        worker::libretro::RetroPixelFormat::Unknown(format) => {
+        RetroPixelFormat::Unknown(format) => {
             warn!(
                 format,
                 width = frame.width(),
