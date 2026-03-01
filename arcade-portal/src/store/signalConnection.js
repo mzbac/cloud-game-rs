@@ -1,6 +1,7 @@
 import { SIGNALING_MESSAGE_IDS, parseSignalMessage } from "./protocol";
 
 const MAX_RECONNECT_DELAY_MS = 5000;
+const CONNECT_TIMEOUT_MS = 8000;
 
 export const createSignalConnection = ({
   url,
@@ -17,10 +18,58 @@ export const createSignalConnection = ({
   let reconnectTimer;
   let socket;
   let cleanupSocket;
+  let cleanupLifecycle;
+
+  const isPageVisible = () => {
+    if (typeof document === "undefined") {
+      return true;
+    }
+    return document.visibilityState === "visible";
+  };
+
+  const isOnline = () => {
+    if (typeof navigator === "undefined") {
+      return true;
+    }
+    return navigator.onLine !== false;
+  };
+
+  const canAttemptConnection = () => !closedByApp && isPageVisible() && isOnline();
+
+  const sendGetGames = (targetSocket) => {
+    if (!targetSocket || targetSocket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    try {
+      targetSocket.send(
+        JSON.stringify({
+          id: SIGNALING_MESSAGE_IDS.GET_GAMES,
+        })
+      );
+    } catch (err) {
+      if (typeof logError === "function") {
+        logError("[signal] getGames send failed", err);
+      }
+      try {
+        targetSocket.close();
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const safeClearTimeout = (timeoutId) => {
+    if (!timeoutId) {
+      return;
+    }
+    clearTimeout(timeoutId);
+  };
 
   const connect = (attempt = 0) => {
     const nextSocket = new WebSocket(url);
     let heartbeatId;
+    let connectTimeoutId;
 
     if (typeof onSocketChange === "function") {
       onSocketChange(nextSocket);
@@ -29,6 +78,13 @@ export const createSignalConnection = ({
     if (typeof logInfo === "function") {
       logInfo(`[signal] connecting to ${urlForLog} (attempt ${attempt + 1})`);
     }
+
+    const stopConnectTimeout = () => {
+      if (connectTimeoutId) {
+        safeClearTimeout(connectTimeoutId);
+        connectTimeoutId = null;
+      }
+    };
 
     const startHeartbeat = () => {
       heartbeatId = window.setInterval(() => {
@@ -44,8 +100,23 @@ export const createSignalConnection = ({
     };
 
     const handleClose = (evt) => {
+      stopConnectTimeout();
       stopHeartbeat();
       if (closedByApp) {
+        return;
+      }
+
+      if (socket !== nextSocket) {
+        return;
+      }
+
+      if (!canAttemptConnection()) {
+        if (typeof logWarn === "function") {
+          logWarn("[signal] websocket closed while offline/backgrounded; waiting for foreground", {
+            code: evt.code,
+            reason: evt.reason,
+          });
+        }
         return;
       }
 
@@ -59,7 +130,16 @@ export const createSignalConnection = ({
         });
       }
 
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
       reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (!canAttemptConnection()) {
+          return;
+        }
         socket = connect(Math.min(attempt + 1, 5));
       }, delay);
     };
@@ -93,31 +173,21 @@ export const createSignalConnection = ({
     };
 
     const requestGames = () => {
-      if (nextSocket.readyState !== WebSocket.OPEN) {
-        return;
-      }
-
-      try {
-        nextSocket.send(
-          JSON.stringify({
-            id: SIGNALING_MESSAGE_IDS.GET_GAMES,
-          })
-        );
-      } catch (err) {
-        if (typeof logError === "function") {
-          logError("[signal] getGames send failed", err);
-        }
-      }
+      sendGetGames(nextSocket);
     };
 
     const handleOpen = () => {
+      stopConnectTimeout();
       requestGames();
       startHeartbeat();
     };
 
     const handleError = (evt) => {
       if (typeof logError === "function") {
-        logError("[signal] websocket error", evt);
+        logError("[signal] websocket error", {
+          readyState: nextSocket.readyState,
+          event: evt,
+        });
       }
     };
 
@@ -131,13 +201,85 @@ export const createSignalConnection = ({
       nextSocket.removeEventListener("close", handleClose);
       nextSocket.removeEventListener("message", handleMessage);
       nextSocket.removeEventListener("error", handleError);
+      stopConnectTimeout();
       stopHeartbeat();
     };
+
+    connectTimeoutId = window.setTimeout(() => {
+      if (socket !== nextSocket) {
+        return;
+      }
+      if (nextSocket.readyState === WebSocket.CONNECTING) {
+        if (typeof logWarn === "function") {
+          logWarn("[signal] websocket connect timeout, reconnecting", {
+            timeoutMs: CONNECT_TIMEOUT_MS,
+          });
+        }
+        try {
+          nextSocket.close();
+        } catch {
+          // ignore
+        }
+      }
+    }, CONNECT_TIMEOUT_MS);
 
     return nextSocket;
   };
 
-  socket = connect();
+  if (canAttemptConnection()) {
+    socket = connect();
+  } else {
+    socket = null;
+  }
+
+  const recoverOnForeground = () => {
+    if (closedByApp) {
+      return;
+    }
+
+    if (!canAttemptConnection()) {
+      return;
+    }
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      sendGetGames(socket);
+      return;
+    }
+
+    if (socket && socket.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+
+    if (socket && socket.readyState === WebSocket.CLOSING) {
+      return;
+    }
+
+    if (reconnectTimer) {
+      return;
+    }
+
+    socket = connect();
+  };
+
+  if (typeof window !== "undefined" && typeof document !== "undefined") {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        recoverOnForeground();
+      }
+    };
+
+    window.addEventListener("pageshow", recoverOnForeground);
+    window.addEventListener("focus", recoverOnForeground);
+    window.addEventListener("online", recoverOnForeground);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    cleanupLifecycle = () => {
+      window.removeEventListener("pageshow", recoverOnForeground);
+      window.removeEventListener("focus", recoverOnForeground);
+      window.removeEventListener("online", recoverOnForeground);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }
 
   return {
     close: () => {
@@ -145,6 +287,11 @@ export const createSignalConnection = ({
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+
+      if (cleanupLifecycle) {
+        cleanupLifecycle();
+        cleanupLifecycle = null;
       }
 
       if (cleanupSocket) {

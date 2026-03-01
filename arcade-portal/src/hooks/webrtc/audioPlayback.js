@@ -85,8 +85,30 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
   let nextAudioStartTime = 0;
   let audioSampleRate = DEFAULT_AUDIO_SAMPLE_RATE;
   let audioResumeInProgress;
+  let audioActivated;
 
-  const requestAudioPlayback = (allowCreate) => {
+  const primeAudioUnlock = () => {
+    if (!audioContext || audioContext.state === "closed") {
+      return;
+    }
+
+    try {
+      const buffer = audioContext.createBuffer(1, 1, audioContext.sampleRate);
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContext.destination);
+      source.start(0);
+    } catch (err) {
+      logWarn("[audio] unlock prime failed", err);
+    }
+  };
+
+  const requestAudioPlayback = (allowCreate, options) => {
+    const fromUserGesture = Boolean(options && options.fromUserGesture);
+    if (fromUserGesture) {
+      audioActivated = true;
+    }
+
     if (!audioContext || audioContext.state === "closed") {
       if (!allowCreate) {
         setAudioStatus("blocked");
@@ -115,6 +137,9 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
 
     if (!audioResumeInProgress) {
       setAudioStatus(audioContext.state || "unknown");
+      if (fromUserGesture) {
+        primeAudioUnlock();
+      }
       audioResumeInProgress = audioContext
         .resume()
         .then(() => {
@@ -130,9 +155,12 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
     }
   };
 
-  const resumeAudioFromGesture = () => requestAudioPlayback(true);
+  const resumeAudioFromGesture = () =>
+    requestAudioPlayback(true, { fromUserGesture: true });
+
+  const resumeAudioFromForeground = () => requestAudioPlayback(Boolean(audioActivated));
   if (resumeAudioRef) {
-    resumeAudioRef.current = resumeAudioFromGesture;
+    resumeAudioRef.current = (options) => requestAudioPlayback(true, options);
   }
 
   const playAudioChunk = (encoded, sampleRate, channels) => {
@@ -230,6 +258,7 @@ export const createAudioPlaybackController = ({ setAudioStatus, resumeAudioRef }
   return {
     requestAudioPlayback,
     resumeAudioFromGesture,
+    resumeAudioFromForeground,
     handleAudioMessage,
     cleanup,
   };

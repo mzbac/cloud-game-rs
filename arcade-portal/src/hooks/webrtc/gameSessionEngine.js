@@ -124,7 +124,12 @@ export const startWebRtcGameSession = ({
     setAudioStatus,
     resumeAudioRef,
   });
-  const { requestAudioPlayback, resumeAudioFromGesture, handleAudioMessage } =
+  const {
+    requestAudioPlayback,
+    resumeAudioFromGesture,
+    resumeAudioFromForeground,
+    handleAudioMessage,
+  } =
     audioController;
 
   const syncMediaDisplay = () => {
@@ -373,6 +378,18 @@ export const startWebRtcGameSession = ({
   document.addEventListener("pointerdown", resumeAudioFromGesture);
   document.addEventListener("touchstart", resumeAudioFromGesture);
 
+  const recoverAudioOnForeground = () => {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+    resumeAudioFromForeground();
+  };
+
+  document.addEventListener("visibilitychange", recoverAudioOnForeground);
+  window.addEventListener("pageshow", recoverAudioOnForeground);
+  window.addEventListener("focus", recoverAudioOnForeground);
+  window.addEventListener("online", recoverAudioOnForeground);
+
   return () => {
     stopInputLoop();
     stopVideoStallDetector();
@@ -414,5 +431,9 @@ export const startWebRtcGameSession = ({
     document.removeEventListener("mousedown", resumeAudioFromGesture);
     document.removeEventListener("pointerdown", resumeAudioFromGesture);
     document.removeEventListener("touchstart", resumeAudioFromGesture);
+    document.removeEventListener("visibilitychange", recoverAudioOnForeground);
+    window.removeEventListener("pageshow", recoverAudioOnForeground);
+    window.removeEventListener("focus", recoverAudioOnForeground);
+    window.removeEventListener("online", recoverAudioOnForeground);
   };
 };

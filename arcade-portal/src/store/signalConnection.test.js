@@ -39,6 +39,7 @@ class FakeWebSocket {
 
   close() {
     this.readyState = FakeWebSocket.CLOSED;
+    this.dispatch("close", { code: 1000, reason: "closed" });
   }
 }
 
@@ -179,5 +180,93 @@ describe("createSignalConnection", () => {
     const sentBefore = socketRef.sent.length;
     vi.advanceTimersByTime(2000);
     expect(socketRef.sent.length).toBe(sentBefore);
+  });
+
+  it("re-requests games when the page is shown again", () => {
+    let socket = null;
+    const onSocketChange = vi.fn((next) => {
+      socket = next;
+    });
+
+    const conn = createSignalConnection({
+      url: "ws://example/ws",
+      urlForLog: "ws://example/ws",
+      heartbeatMs: 60_000,
+      onSocketChange,
+      onGames: vi.fn(),
+      onPlayerCount: vi.fn(),
+      logInfo: vi.fn(),
+      logWarn: vi.fn(),
+      logError: vi.fn(),
+    });
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.dispatch("open");
+    socket.sent.length = 0;
+
+    window.dispatchEvent(new Event("pageshow"));
+    expect(socket.sent.length).toBe(1);
+    expect(JSON.parse(socket.sent[0])).toEqual({ id: "getGames" });
+
+    conn.close();
+  });
+
+  it("reconnects when the initial websocket connection stalls", () => {
+    let socket = null;
+    const onSocketChange = vi.fn((next) => {
+      socket = next;
+    });
+
+    const conn = createSignalConnection({
+      url: "ws://example/ws",
+      urlForLog: "ws://example/ws",
+      heartbeatMs: 1000,
+      onSocketChange,
+      onGames: vi.fn(),
+      onPlayerCount: vi.fn(),
+      logInfo: vi.fn(),
+      logWarn: vi.fn(),
+      logError: vi.fn(),
+    });
+
+    const firstSocket = socket;
+    expect(firstSocket).toBeInstanceOf(FakeWebSocket);
+    expect(firstSocket.readyState).toBe(FakeWebSocket.CONNECTING);
+
+    vi.advanceTimersByTime(8000);
+    vi.advanceTimersByTime(1000);
+
+    expect(socket).toBeInstanceOf(FakeWebSocket);
+    expect(socket).not.toBe(firstSocket);
+
+    conn.close();
+  });
+
+  it("does not reconnect on pageshow while the websocket is closing", () => {
+    let socket = null;
+    const onSocketChange = vi.fn((next) => {
+      socket = next;
+    });
+
+    const conn = createSignalConnection({
+      url: "ws://example/ws",
+      urlForLog: "ws://example/ws",
+      heartbeatMs: 60_000,
+      onSocketChange,
+      onGames: vi.fn(),
+      onPlayerCount: vi.fn(),
+      logInfo: vi.fn(),
+      logWarn: vi.fn(),
+      logError: vi.fn(),
+    });
+
+    const firstSocket = socket;
+    firstSocket.readyState = FakeWebSocket.CLOSING;
+
+    window.dispatchEvent(new Event("pageshow"));
+    expect(onSocketChange).toHaveBeenCalledTimes(1);
+    expect(socket).toBe(firstSocket);
+
+    conn.close();
   });
 });

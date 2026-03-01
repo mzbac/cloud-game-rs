@@ -20,8 +20,9 @@ export const useWebRtcGameSession = ({
   const [audioStatus, setAudioStatus] = useState("unknown");
   const resumeAudioRef = useRef(null);
 
-  const resumeAudio = useCallback(() => {
-    resumeAudioRef.current?.();
+  const resumeAudio = useCallback((event) => {
+    const fromUserGesture = Boolean(event);
+    resumeAudioRef.current?.({ fromUserGesture });
   }, []);
 
   useEffect(() => {
@@ -62,4 +63,3 @@ export const useWebRtcGameSession = ({
     resumeAudio,
   };
 };
-
