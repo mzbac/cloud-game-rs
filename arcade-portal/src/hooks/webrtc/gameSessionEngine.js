@@ -103,6 +103,7 @@ export const startWebRtcGameSession = ({
   setAudioStatus,
   resumeAudioRef,
 }) => {
+  let isDisposed = false;
   const pc = new RTCPeerConnection({
     iceServers: [
       {
@@ -139,10 +140,13 @@ export const startWebRtcGameSession = ({
     }
 
     if (mediaStream.getTracks().length > 0) {
-      remoteVideo.srcObject = mediaStream;
       remoteVideo.autoplay = true;
       remoteVideo.playsInline = true;
       remoteVideo.muted = true;
+      remoteVideo.defaultMuted = true;
+      remoteVideo.setAttribute("playsinline", "");
+      remoteVideo.setAttribute("webkit-playsinline", "");
+      remoteVideo.srcObject = mediaStream;
       remoteVideo.style.display = "block";
       const playPromise = remoteVideo.play();
       ignorePromiseRejection(playPromise, "[webrtc] remote video play failed");
@@ -283,7 +287,32 @@ export const startWebRtcGameSession = ({
     conn.addEventListener("open", handleSocketOpen);
   }
 
-  const handleSocketMessage = async (event) => {
+  const pendingIceCandidates = [];
+  let messageProcessingChain = Promise.resolve();
+
+  const flushPendingIceCandidates = async () => {
+    if (isDisposed || pc.signalingState === "closed" || !pc.remoteDescription) {
+      return;
+    }
+
+    while (pendingIceCandidates.length > 0) {
+      const candidate = pendingIceCandidates.shift();
+      if (!candidate) {
+        continue;
+      }
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (err) {
+        logWarn("[webrtc] failed to add ice candidate", err);
+      }
+    }
+  };
+
+  const handleSocketMessageInner = async (event) => {
+    if (isDisposed) {
+      return;
+    }
+
     const msg = parseSignalMessage(event.data);
     if (!msg) {
       return;
@@ -308,20 +337,34 @@ export const startWebRtcGameSession = ({
             sessionID: workerID,
           })
         );
+        await flushPendingIceCandidates();
       } catch (err) {
         logError("[webrtc] failed to process offer/answer", err);
       }
+      return;
     }
 
     if (msg.id === SIGNALING_MESSAGE_IDS.CANDIDATE) {
       try {
         const decoded = atob(msg.data);
         const candidate = new RTCIceCandidate(JSON.parse(decoded));
-        pc.addIceCandidate(candidate);
+        if (!pc.remoteDescription) {
+          pendingIceCandidates.push(candidate);
+          return;
+        }
+        await pc.addIceCandidate(candidate);
       } catch (err) {
         logError("[webrtc] failed to process candidate", err);
       }
     }
+  };
+
+  const handleSocketMessage = (event) => {
+    messageProcessingChain = messageProcessingChain
+      .then(() => handleSocketMessageInner(event))
+      .catch((err) => {
+        logError("[webrtc] failed to process signaling message", err);
+      });
   };
 
   const handleSocketError = (evt) => {
@@ -391,6 +434,7 @@ export const startWebRtcGameSession = ({
   window.addEventListener("online", recoverAudioOnForeground);
 
   return () => {
+    isDisposed = true;
     stopInputLoop();
     stopVideoStallDetector();
     if (conn?.readyState === WebSocket.OPEN) {

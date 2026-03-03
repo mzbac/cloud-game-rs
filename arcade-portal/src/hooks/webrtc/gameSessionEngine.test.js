@@ -36,6 +36,8 @@ class FakePeerConnection {
   connectionState = "connected";
   iceConnectionState = "connected";
   signalingState = "stable";
+  remoteDescription = null;
+  localDescription = null;
 
   onconnectionstatechange = null;
   ontrack = null;
@@ -52,12 +54,16 @@ class FakePeerConnection {
     this.connectionState = "closed";
   }
 
-  async setRemoteDescription() {}
-  async createAnswer() {
+  setRemoteDescription = vi.fn(async (desc) => {
+    this.remoteDescription = desc;
+  });
+  createAnswer = vi.fn(async () => {
     return { type: "answer", sdp: "" };
-  }
-  async setLocalDescription() {}
-  async addIceCandidate() {}
+  });
+  setLocalDescription = vi.fn(async (desc) => {
+    this.localDescription = desc;
+  });
+  addIceCandidate = vi.fn(async () => {});
 }
 
 describe("startWebRtcGameSession input plumbing", () => {
@@ -122,3 +128,116 @@ describe("startWebRtcGameSession input plumbing", () => {
   });
 });
 
+class FakeWebSocketConnection {
+  static OPEN = 1;
+  readyState = FakeWebSocketConnection.OPEN;
+
+  #listeners = new Map();
+
+  addEventListener(type, handler) {
+    if (!this.#listeners.has(type)) {
+      this.#listeners.set(type, new Set());
+    }
+    this.#listeners.get(type).add(handler);
+  }
+
+  removeEventListener(type, handler) {
+    this.#listeners.get(type)?.delete(handler);
+  }
+
+  send() {}
+
+  emit(type, event) {
+    for (const handler of this.#listeners.get(type) || []) {
+      handler(event);
+    }
+  }
+}
+
+describe("startWebRtcGameSession ICE candidate ordering", () => {
+  const originalPeerConnection = globalThis.RTCPeerConnection;
+  const originalMediaStream = globalThis.MediaStream;
+  const originalWebSocket = globalThis.WebSocket;
+  const originalRTCSessionDescription = globalThis.RTCSessionDescription;
+  const originalRTCIceCandidate = globalThis.RTCIceCandidate;
+
+  const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  beforeEach(() => {
+    captured.lastPeerConnection = null;
+    globalThis.RTCPeerConnection = FakePeerConnection;
+    globalThis.MediaStream = FakeMediaStream;
+    globalThis.WebSocket = FakeWebSocketConnection;
+    globalThis.RTCSessionDescription = class RTCSessionDescription {
+      constructor(desc) {
+        Object.assign(this, desc);
+      }
+    };
+    globalThis.RTCIceCandidate = class RTCIceCandidate {
+      constructor(candidate) {
+        Object.assign(this, candidate);
+      }
+    };
+  });
+
+  afterEach(() => {
+    globalThis.RTCPeerConnection = originalPeerConnection;
+    globalThis.MediaStream = originalMediaStream;
+    globalThis.WebSocket = originalWebSocket;
+    globalThis.RTCSessionDescription = originalRTCSessionDescription;
+    globalThis.RTCIceCandidate = originalRTCIceCandidate;
+  });
+
+  it("queues candidates until the offer is applied", async () => {
+    const conn = new FakeWebSocketConnection();
+    const cleanup = startWebRtcGameSession({
+      conn,
+      workerID: "worker-1",
+      remoteVideoRef: { current: null },
+      joypadKeys: [0],
+      keyboardCodesRef: { current: new Set() },
+      keyboardMappingRef: { current: {} },
+      gamepadMappingRef: { current: {} },
+      touchStateRef: { current: {} },
+      externalInputMaskRef: { current: 0 },
+      setConnectionState: vi.fn(),
+      setHasMedia: vi.fn(),
+      setVideoStalled: vi.fn(),
+      setAudioStatus: vi.fn(),
+      resumeAudioRef: { current: null },
+    });
+
+    expect(captured.lastPeerConnection).not.toBeNull();
+
+    const candidateInit = {
+      candidate: "candidate:0 1 UDP 2122252543 192.168.1.35 51372 typ host",
+      sdpMid: "0",
+      sdpMLineIndex: 0,
+    };
+    conn.emit("message", {
+      data: JSON.stringify({
+        id: "candidate",
+        data: btoa(JSON.stringify(candidateInit)),
+        sessionID: "worker-1",
+      }),
+    });
+
+    await flushPromises();
+    expect(captured.lastPeerConnection.addIceCandidate).toHaveBeenCalledTimes(0);
+
+    const offerInit = { type: "offer", sdp: "v=0\r\n" };
+    conn.emit("message", {
+      data: JSON.stringify({
+        id: "offer",
+        data: btoa(JSON.stringify(offerInit)),
+        sessionID: "worker-1",
+      }),
+    });
+
+    await flushPromises();
+    expect(captured.lastPeerConnection.setRemoteDescription).toHaveBeenCalledTimes(1);
+    expect(captured.lastPeerConnection.addIceCandidate).toHaveBeenCalledTimes(1);
+
+    cleanup();
+  });
+});
