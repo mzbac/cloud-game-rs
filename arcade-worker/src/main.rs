@@ -21,6 +21,7 @@ mod video_sender;
 mod webrtc_session;
 
 const EMULATOR_DEFAULT_FPS: f64 = 60.0;
+const VIDEO_FRAME_QUEUE_CAPACITY: usize = 24;
 
 fn init_logging() {
     let level = env::var("WORKER_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
@@ -48,7 +49,8 @@ async fn main() {
     let room = Arc::new(room::Room::new(signal_tx.clone(), Handle::current()));
 
     let (input_sender, input_receiver) = unbounded::<room::InputEvent>();
-    let (frame_sender, frame_receiver) = crossbeam_channel::bounded::<VideoFrame>(24);
+    let (frame_sender, frame_receiver) =
+        crossbeam_channel::bounded::<VideoFrame>(VIDEO_FRAME_QUEUE_CAPACITY);
     let (audio_sender, audio_receiver) = unbounded::<AudioFrame>();
 
     let mut core = match Core::load_library(&profile.core).and_then(|mut core| {
@@ -59,6 +61,13 @@ async fn main() {
             input_state: None,
             audio_sample: None,
             audio_sample_batch: None,
+            should_emit_video: Some({
+                let room = room.clone();
+                let frame_receiver = frame_receiver.clone();
+                Arc::new(move || {
+                    room.has_video_sessions() && frame_receiver.len() < VIDEO_FRAME_QUEUE_CAPACITY
+                })
+            }),
             on_video_frame: Some({
                 let frame_sender = frame_sender.clone();
                 let frame_receiver = frame_receiver.clone();

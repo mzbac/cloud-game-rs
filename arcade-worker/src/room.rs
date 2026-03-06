@@ -18,7 +18,6 @@ use webrtc::track::track_local::TrackLocal;
 
 use arcade_signal_protocol::{audio as audio_proto, ids as signal_ids, SignalMessage};
 use crate::room_state::{PendingInputs, PlayerSlots};
-use crate::video_sender;
 
 const AUDIO_CHANNEL_MAX_BUFFER_BYTES: usize = 128 * 1024;
 
@@ -44,6 +43,21 @@ impl VideoSample {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct VideoQueuePushResult {
+    pub(crate) len_after: usize,
+    pub(crate) was_full: bool,
+    pub(crate) dropped_existing: usize,
+    pub(crate) dropped_incoming: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct VideoPressureSnapshot {
+    pub(crate) max_queue_len: usize,
+    pub(crate) congested_events: usize,
+    pub(crate) dropped_frames: usize,
+}
+
 pub(crate) struct VideoSampleQueue {
     capacity: usize,
     closed: AtomicBool,
@@ -66,28 +80,49 @@ impl VideoSampleQueue {
         self.notify.notify_waiters();
     }
 
-    pub(crate) fn push(&self, sample: Arc<VideoSample>) {
+    pub(crate) fn push(&self, sample: Arc<VideoSample>) -> VideoQueuePushResult {
+        let mut result = VideoQueuePushResult::default();
         if self.closed.load(Ordering::Relaxed) {
-            return;
+            result.dropped_incoming = true;
+            return result;
         }
 
         let mut buffer = match self.buffer.lock() {
             Ok(guard) => guard,
-            Err(_) => return,
+            Err(_) => {
+                result.dropped_incoming = true;
+                return result;
+            }
         };
 
         if buffer.len() >= self.capacity {
-            if let Some(front) = buffer.front() {
-                if front.is_keyframe && !sample.is_keyframe {
-                    return;
+            result.was_full = true;
+
+            if sample.is_keyframe {
+                result.dropped_existing = buffer.len();
+                buffer.clear();
+            } else if let Some(front) = buffer.front() {
+                if front.is_keyframe {
+                    if buffer.len() == 1 {
+                        result.dropped_incoming = true;
+                        result.len_after = buffer.len();
+                        return result;
+                    }
+
+                    let removed = buffer.remove(1);
+                    result.dropped_existing = usize::from(removed.is_some());
+                } else {
+                    let removed = buffer.pop_front();
+                    result.dropped_existing = usize::from(removed.is_some());
                 }
             }
-            buffer.pop_front();
         }
 
         buffer.push_back(sample);
+        result.len_after = buffer.len();
         drop(buffer);
         self.notify.notify_one();
+        result
     }
 
     pub(crate) async fn pop(&self) -> Option<Arc<VideoSample>> {
@@ -173,6 +208,9 @@ pub(crate) struct Room {
     pending_inputs: Arc<Mutex<PendingInputs>>,
     keyframe_refresh: Arc<AtomicBool>,
     force_idr: Arc<AtomicBool>,
+    video_max_queue_len: Arc<AtomicUsize>,
+    video_congested_events: Arc<AtomicUsize>,
+    video_dropped_frames: Arc<AtomicUsize>,
     signal_tx: mpsc::UnboundedSender<SignalMessage>,
     worker_handle: Handle,
     audio_sample_rate: Arc<AtomicU32>,
@@ -187,6 +225,9 @@ impl Room {
             pending_inputs: Arc::new(Mutex::new(PendingInputs::default())),
             keyframe_refresh: Arc::new(AtomicBool::new(false)),
             force_idr: Arc::new(AtomicBool::new(false)),
+            video_max_queue_len: Arc::new(AtomicUsize::new(0)),
+            video_congested_events: Arc::new(AtomicUsize::new(0)),
+            video_dropped_frames: Arc::new(AtomicUsize::new(0)),
             signal_tx,
             worker_handle,
             audio_sample_rate: Arc::new(AtomicU32::new(48_000)),
@@ -203,6 +244,14 @@ impl Room {
 
     pub(crate) fn request_idr(&self) {
         self.force_idr.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn take_video_pressure_snapshot(&self) -> VideoPressureSnapshot {
+        VideoPressureSnapshot {
+            max_queue_len: self.video_max_queue_len.swap(0, Ordering::Relaxed),
+            congested_events: self.video_congested_events.swap(0, Ordering::Relaxed),
+            dropped_frames: self.video_dropped_frames.swap(0, Ordering::Relaxed),
+        }
     }
 
     pub(crate) fn with_session(&self, session_id: &str) -> Option<Arc<Session>> {
@@ -452,6 +501,7 @@ impl Room {
         payload: Bytes,
         sample_duration_ms: u64,
         packet_timestamp: u32,
+        is_keyframe: bool,
     ) {
         if !self.has_video_sessions() {
             return;
@@ -464,26 +514,45 @@ impl Room {
 
         let duration = Duration::from_millis(sample_duration_ms.max(1));
         let timestamp = SystemTime::now();
-        let is_keyframe = video_sender::h264_contains_idr(payload.as_ref());
+        let sample = Arc::new(VideoSample {
+            sample: media::Sample {
+                data: payload,
+                duration,
+                packet_timestamp,
+                timestamp,
+                ..Default::default()
+            },
+            is_keyframe,
+        });
+        let mut pressure = VideoPressureSnapshot::default();
 
         for session in sessions {
             if session.video_track().id().is_empty() {
                 continue;
             }
 
-            let sample = media::Sample {
-                data: payload.clone(),
-                duration,
-                packet_timestamp,
-                timestamp,
-                ..Default::default()
-            };
-
             // Favor low latency over buffering; if a client falls behind drop older queued frames.
-            session.video_queue().push(Arc::new(VideoSample {
-                sample,
-                is_keyframe,
-            }));
+            let result = session.video_queue().push(sample.clone());
+            pressure.max_queue_len = pressure.max_queue_len.max(result.len_after);
+            if result.was_full {
+                pressure.congested_events = pressure.congested_events.saturating_add(1);
+            }
+            pressure.dropped_frames = pressure
+                .dropped_frames
+                .saturating_add(result.dropped_existing + usize::from(result.dropped_incoming));
+        }
+
+        if pressure.max_queue_len > 0 {
+            self.video_max_queue_len
+                .fetch_max(pressure.max_queue_len, Ordering::Relaxed);
+        }
+        if pressure.congested_events > 0 {
+            self.video_congested_events
+                .fetch_add(pressure.congested_events, Ordering::Relaxed);
+        }
+        if pressure.dropped_frames > 0 {
+            self.video_dropped_frames
+                .fetch_add(pressure.dropped_frames, Ordering::Relaxed);
         }
     }
 
@@ -531,5 +600,58 @@ impl Room {
 
     pub(crate) fn audio_sample_rate(&self) -> u32 {
         self.audio_sample_rate.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(id: u8, is_keyframe: bool) -> Arc<VideoSample> {
+        Arc::new(VideoSample {
+            sample: media::Sample {
+                data: Bytes::from(vec![id]),
+                ..Default::default()
+            },
+            is_keyframe,
+        })
+    }
+
+    fn queued_ids(queue: &VideoSampleQueue) -> Vec<u8> {
+        queue
+            .buffer
+            .lock()
+            .expect("queue lock")
+            .iter()
+            .map(|sample| sample.sample.data[0])
+            .collect()
+    }
+
+    #[test]
+    fn full_queue_keeps_keyframe_and_advances_delta_frames() {
+        let queue = VideoSampleQueue::new(3);
+        queue.push(sample(1, true));
+        queue.push(sample(2, false));
+        queue.push(sample(3, false));
+
+        let result = queue.push(sample(4, false));
+
+        assert!(result.was_full);
+        assert_eq!(result.dropped_existing, 1);
+        assert_eq!(queued_ids(&queue), vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn incoming_keyframe_replaces_stale_backlog_when_queue_is_full() {
+        let queue = VideoSampleQueue::new(3);
+        queue.push(sample(1, true));
+        queue.push(sample(2, false));
+        queue.push(sample(3, false));
+
+        let result = queue.push(sample(9, true));
+
+        assert!(result.was_full);
+        assert_eq!(result.dropped_existing, 3);
+        assert_eq!(queued_ids(&queue), vec![9]);
     }
 }

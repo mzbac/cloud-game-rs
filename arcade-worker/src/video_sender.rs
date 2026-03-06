@@ -39,11 +39,12 @@ const VIDEO_ENCODER_REFRESH_FRAMES: u64 = 200;
 const VIDEO_TARGET_MAX_PAYLOAD_BYTES: usize = 768 * 1024;
 const H264_LEVEL_3_1_MBS_PER_SEC: u64 = 108_000;
 const VIDEO_ENCODER_BITS_PER_PIXEL_PER_FRAME: u64 = 8;
-const VIDEO_ENCODER_MIN_BITRATE_BPS: u32 = 1_000_000;
+const VIDEO_ENCODER_MIN_BITRATE_BPS: u32 = 500_000;
 const VIDEO_ENCODER_MAX_BITRATE_BPS: u32 = 4_000_000;
 /// Minimum valid H264 payload size. Must pass all payloads to retain WebRTC packet pacing (e.g. empty P-frames are 12-13 bytes).
 const VIDEO_ENCODER_MIN_PAYLOAD_BYTES: usize = 1;
 const VIDEO_SCALE_FALLBACK_TO_SOURCE: bool = true;
+const VIDEO_QUEUE_PRESSURE_HIGH_WATERMARK: usize = 2;
 
 #[derive(Clone, Copy)]
 struct VideoProfile {
@@ -89,6 +90,19 @@ fn is_min_video_profile(profile: &VideoProfile) -> bool {
     profile.target_width == VIDEO_WIDTH_LIMIT_MIN
         && profile.target_height == VIDEO_HEIGHT_LIMIT_MIN
         && profile.frame_interval_ms == VIDEO_FRAME_INTERVAL_MS_MAX
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EncodeSettings {
+    width: u32,
+    height: u32,
+    frame_interval_ms: u64,
+}
+
+#[derive(Debug)]
+struct EncodedFrame {
+    payload: Vec<u8>,
+    is_keyframe: bool,
 }
 
 pub(crate) fn h264_contains_idr(bitstream: &[u8]) -> bool {
@@ -196,7 +210,7 @@ struct FrameSenderState {
     scaled_failures_for_source: u32,
     scaled_cooldown_frames: u32,
     encode_failure_cooldown_frames: u32,
-    last_encode_dims: Option<(u32, u32)>,
+    last_encode_settings: Option<EncodeSettings>,
     encode_empty_streak: u32,
     encode_empty_recovery_cooldown_frames: u32,
     rgba_scratch: Vec<u8>,
@@ -208,7 +222,11 @@ struct FrameSenderState {
 impl FrameSenderState {
     fn new() -> Option<Self> {
         let profile = VideoProfile::default();
-        let encoder = match new_encoder_for_dims(VIDEO_WIDTH_LIMIT, VIDEO_HEIGHT_LIMIT) {
+        let encoder = match new_encoder_for_settings(EncodeSettings {
+            width: VIDEO_WIDTH_LIMIT,
+            height: VIDEO_HEIGHT_LIMIT,
+            frame_interval_ms: profile.frame_interval_ms,
+        }) {
             Some(value) => value,
             None => {
                 error!(
@@ -236,7 +254,7 @@ impl FrameSenderState {
             scaled_failures_for_source: 0,
             scaled_cooldown_frames: 0,
             encode_failure_cooldown_frames: 0,
-            last_encode_dims: None,
+            last_encode_settings: None,
             encode_empty_streak: 0,
             encode_empty_recovery_cooldown_frames: 0,
             rgba_scratch: Vec::new(),
@@ -258,7 +276,7 @@ impl FrameSenderState {
         self.scaled_cooldown_frames = 0;
         self.encode_failure_cooldown_frames = 0;
         self.encode_empty_streak = 0;
-        self.last_encode_dims = None;
+        self.last_encode_settings = None;
         self.encoder_frames_since_refresh = 0;
         self.encoder.force_intra_frame();
     }
@@ -270,10 +288,14 @@ impl FrameSenderState {
         }
 
         if room.take_keyframe_refresh() {
-            let refresh_dims = (self.profile.target_width, self.profile.target_height);
-            if let Some(recover_encoder) = new_encoder_for_dims(refresh_dims.0, refresh_dims.1) {
+            let refresh_settings = EncodeSettings {
+                width: self.profile.target_width,
+                height: self.profile.target_height,
+                frame_interval_ms: self.profile.frame_interval_ms,
+            };
+            if let Some(recover_encoder) = new_encoder_for_settings(refresh_settings) {
                 self.encoder = recover_encoder;
-                self.last_encode_dims = None;
+                self.last_encode_settings = None;
                 debug!("refreshed H264 encoder after session join");
             } else {
                 warn!("failed to refresh H264 encoder; retaining current encoder");
@@ -306,6 +328,22 @@ impl FrameSenderState {
 
     fn handle_frame(&mut self, frame: VideoFrame, room: &Room) {
         let now = Instant::now();
+        let mut frame = frame;
+        let pressure = room.take_video_pressure_snapshot();
+        if pressure.congested_events > 0 || pressure.dropped_frames > 0 {
+            if !is_min_video_profile(&self.profile) {
+                degrade_video_profile(&mut self.profile);
+            }
+            self.stable_frames = 0;
+        } else if pressure.max_queue_len >= VIDEO_QUEUE_PRESSURE_HIGH_WATERMARK {
+            self.profile.frame_interval_ms = self
+                .profile
+                .frame_interval_ms
+                .saturating_add(VIDEO_FRAME_INTERVAL_STEP_MS)
+                .min(VIDEO_FRAME_INTERVAL_MS_MAX);
+            self.stable_frames = 0;
+        }
+
         let width = frame.width();
         let height = frame.height();
         let (scaled_w, scaled_h) = scale_dimensions(
@@ -366,11 +404,11 @@ impl FrameSenderState {
             attempted_encode = true;
             if allow_scaled {
                 match build_video_payload(
-                    &frame,
+                    &mut frame,
                     &self.profile,
                     &mut self.encoder,
                     allow_scaled,
-                    &mut self.last_encode_dims,
+                    &mut self.last_encode_settings,
                     &mut self.encode_empty_streak,
                     &mut self.encode_empty_recovery_cooldown_frames,
                     &mut self.rgba_scratch,
@@ -395,11 +433,11 @@ impl FrameSenderState {
                 }
             } else {
                 build_video_payload(
-                    &frame,
+                    &mut frame,
                     &self.profile,
                     &mut self.encoder,
                     false,
-                    &mut self.last_encode_dims,
+                    &mut self.last_encode_settings,
                     &mut self.encode_empty_streak,
                     &mut self.encode_empty_recovery_cooldown_frames,
                     &mut self.rgba_scratch,
@@ -437,7 +475,7 @@ impl FrameSenderState {
             self.disable_scaled_for_source = false;
         }
         if let Some(ref candidate) = payload {
-            if candidate.len() > VIDEO_TARGET_MAX_PAYLOAD_BYTES {
+            if candidate.payload.len() > VIDEO_TARGET_MAX_PAYLOAD_BYTES {
                 if !is_min_video_profile(&self.profile) {
                     degrade_video_profile(&mut self.profile);
                 }
@@ -460,14 +498,15 @@ impl FrameSenderState {
             None => return,
         };
 
-        let payload_len = payload.len();
-        let payload = Bytes::from(payload);
+        let payload_len = payload.payload.len();
+        let is_keyframe = payload.is_keyframe;
+        let payload = Bytes::from(payload.payload);
 
         let frame_timestamp = self.packet_timestamp;
         self.packet_timestamp = self.packet_timestamp.wrapping_add(packet_step);
         self.encoder_frames_since_refresh = self.encoder_frames_since_refresh.saturating_add(1);
         self.first_payload_sent = true;
-        room.broadcast_video_frame(payload, sample_duration_ms, frame_timestamp);
+        room.broadcast_video_frame(payload, sample_duration_ms, frame_timestamp, is_keyframe);
         self.startup_encode_failures = 0;
         self.stable_frames = self.stable_frames.saturating_add(1);
         self.last_sent = now;
@@ -487,16 +526,16 @@ impl FrameSenderState {
 }
 
 fn build_video_payload(
-    frame: &VideoFrame,
+    frame: &mut VideoFrame,
     profile: &VideoProfile,
     encoder: &mut Encoder,
     allow_scaled: bool,
-    last_encode_dims: &mut Option<(u32, u32)>,
+    last_encode_settings: &mut Option<EncodeSettings>,
     empty_encode_streak: &mut u32,
     empty_recovery_cooldown_frames: &mut u32,
     rgba_scratch: &mut Vec<u8>,
     scaled_scratch: &mut Vec<u8>,
-) -> Option<(Vec<u8>, bool)> {
+) -> Option<(EncodedFrame, bool)> {
     let width = frame.width();
     let height = frame.height();
     if width == 0 || height == 0 {
@@ -505,12 +544,12 @@ fn build_video_payload(
 
     let (target_w, target_h) =
         scale_dimensions(width, height, profile.target_width, profile.target_height);
-    fill_rgba_buffer_from_frame(frame, rgba_scratch)?;
+    let rgba_raw = fill_rgba_buffer_from_frame(frame, rgba_scratch)?;
     let should_scale = allow_scaled && (target_w != width || target_h != height);
 
     if should_scale {
         if scale_rgba_nearest(
-            rgba_scratch.as_slice(),
+            rgba_raw,
             width,
             height,
             target_w,
@@ -523,8 +562,9 @@ fn build_video_payload(
                 encoder,
                 target_w,
                 target_h,
+                profile.frame_interval_ms,
                 scaled_scratch.as_slice(),
-                last_encode_dims,
+                last_encode_settings,
                 empty_encode_streak,
                 empty_recovery_cooldown_frames,
             ) {
@@ -540,8 +580,9 @@ fn build_video_payload(
             encoder,
             width,
             height,
-            rgba_scratch.as_slice(),
-            last_encode_dims,
+            profile.frame_interval_ms,
+            rgba_raw,
+            last_encode_settings,
             empty_encode_streak,
             empty_recovery_cooldown_frames,
         ) {
@@ -555,8 +596,9 @@ fn build_video_payload(
         encoder,
         width,
         height,
-        rgba_scratch.as_slice(),
-        last_encode_dims,
+        profile.frame_interval_ms,
+        rgba_raw,
+        last_encode_settings,
         empty_encode_streak,
         empty_recovery_cooldown_frames,
     ) {
@@ -566,21 +608,28 @@ fn build_video_payload(
     None
 }
 
-fn new_encoder_for_dims(width: u32, height: u32) -> Option<Encoder> {
-    if width == 0 || height == 0 {
+fn calculate_encoder_bitrate_bps(settings: EncodeSettings) -> u32 {
+    let base_bitrate_bps = (settings.width as u64)
+        .saturating_mul(settings.height as u64)
+        .saturating_mul(VIDEO_ENCODER_BITS_PER_PIXEL_PER_FRAME);
+    let paced_bitrate_bps = base_bitrate_bps
+        .saturating_mul(VIDEO_FRAME_INTERVAL_MS_MIN)
+        .saturating_div(settings.frame_interval_ms.max(VIDEO_FRAME_INTERVAL_MS_MIN));
+
+    paced_bitrate_bps
+        .min(u64::from(VIDEO_ENCODER_MAX_BITRATE_BPS))
+        .max(u64::from(VIDEO_ENCODER_MIN_BITRATE_BPS)) as u32
+}
+
+fn new_encoder_for_settings(settings: EncodeSettings) -> Option<Encoder> {
+    if settings.width == 0 || settings.height == 0 {
         return None;
     }
 
-    let bitrate_bps = (width as u64)
-        .saturating_mul(height as u64)
-        .saturating_mul(VIDEO_ENCODER_BITS_PER_PIXEL_PER_FRAME)
-        .min(u64::from(VIDEO_ENCODER_MAX_BITRATE_BPS))
-        .max(u64::from(VIDEO_ENCODER_MIN_BITRATE_BPS));
+    let bitrate_bps = calculate_encoder_bitrate_bps(settings);
 
     let config = EncoderConfig::new()
-        .bitrate(BitRate::from_bps(
-            u32::try_from(bitrate_bps).unwrap_or(VIDEO_ENCODER_MAX_BITRATE_BPS),
-        ))
+        .bitrate(BitRate::from_bps(bitrate_bps))
         .max_frame_rate(FrameRate::from_hz(60.0))
         .rate_control_mode(RateControlMode::Bitrate)
         // OpenH264 requires frame skipping for effective bitrate control in real-time modes.
@@ -595,7 +644,14 @@ fn new_encoder_for_dims(width: u32, height: u32) -> Option<Encoder> {
     match Encoder::with_api_config(openh264::OpenH264API::from_source(), config) {
         Ok(encoder) => Some(encoder),
         Err(err) => {
-            warn!(width, height, error = %err, "openh264 encoder init failed");
+            warn!(
+                width = settings.width,
+                height = settings.height,
+                frame_interval_ms = settings.frame_interval_ms,
+                bitrate_bps,
+                error = %err,
+                "openh264 encoder init failed"
+            );
             None
         }
     }
@@ -605,11 +661,12 @@ fn encode_frame_with_retry(
     encoder: &mut Encoder,
     width: u32,
     height: u32,
+    frame_interval_ms: u64,
     rgba_raw: &[u8],
-    last_encode_dims: &mut Option<(u32, u32)>,
+    last_encode_settings: &mut Option<EncodeSettings>,
     empty_encode_streak: &mut u32,
     empty_recovery_cooldown_frames: &mut u32,
-) -> Option<Vec<u8>> {
+) -> Option<EncodedFrame> {
     if *empty_recovery_cooldown_frames > 0 {
         *empty_recovery_cooldown_frames = empty_recovery_cooldown_frames.saturating_sub(1);
     }
@@ -620,12 +677,15 @@ fn encode_frame_with_retry(
     );
     let yuv = YUVBuffer::from_rgb_source(rgba);
 
-    let encode_once = |encoder: &mut Encoder, yuv: &YUVBuffer| -> Option<Vec<u8>> {
+    let encode_once = |encoder: &mut Encoder, yuv: &YUVBuffer| -> Option<EncodedFrame> {
         let mut output = Vec::new();
         match encoder.encode(yuv) {
             Ok(bitstream) => {
                 bitstream.write_vec(&mut output);
-                (output.len() >= VIDEO_ENCODER_MIN_PAYLOAD_BYTES).then_some(output)
+                (output.len() >= VIDEO_ENCODER_MIN_PAYLOAD_BYTES).then_some(EncodedFrame {
+                    is_keyframe: h264_contains_idr(&output),
+                    payload: output,
+                })
             }
             Err(err) => {
                 debug!(width, height, error = ?err, "openh264 encode error");
@@ -634,16 +694,22 @@ fn encode_frame_with_retry(
         }
     };
 
-    let had_encode_dims_reset = if last_encode_dims.is_none()
-        || last_encode_dims.map_or(false, |(w, h)| w != width || h != height)
+    let settings = EncodeSettings {
+        width,
+        height,
+        frame_interval_ms,
+    };
+
+    let had_encode_settings_reset = if last_encode_settings.is_none()
+        || last_encode_settings.map_or(false, |current| current != settings)
     {
-        if let Some(new_encoder) = new_encoder_for_dims(width, height) {
+        if let Some(new_encoder) = new_encoder_for_settings(settings) {
             *encoder = new_encoder;
-            *last_encode_dims = Some((width, height));
+            *last_encode_settings = Some(settings);
             *empty_encode_streak = 0;
             true
         } else {
-            warn!(width, height, "openh264 encoder reinitialize failed");
+            warn!(width, height, frame_interval_ms, "openh264 encoder reinitialize failed");
             return None;
         }
     } else {
@@ -651,7 +717,7 @@ fn encode_frame_with_retry(
     };
 
     let mut output = encode_once(encoder, &yuv);
-    if output.is_none() && had_encode_dims_reset {
+    if output.is_none() && had_encode_settings_reset {
         output = encode_once(encoder, &yuv);
     }
 
@@ -665,9 +731,9 @@ fn encode_frame_with_retry(
     if *empty_encode_streak >= VIDEO_ENCODER_EMPTY_RETRY_THRESHOLD
         && *empty_recovery_cooldown_frames == 0
     {
-        if let Some(recovered_encoder) = new_encoder_for_dims(width, height) {
+        if let Some(recovered_encoder) = new_encoder_for_settings(settings) {
             *encoder = recovered_encoder;
-            *last_encode_dims = Some((width, height));
+            *last_encode_settings = Some(settings);
             if let Some(output) = encode_once(encoder, &yuv) {
                 *empty_encode_streak = 0;
                 *empty_recovery_cooldown_frames = 0;
@@ -683,7 +749,10 @@ fn encode_frame_with_retry(
     None
 }
 
-pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>) -> Option<()> {
+pub(crate) fn fill_rgba_buffer_from_frame<'a>(
+    frame: &'a mut VideoFrame,
+    out: &'a mut Vec<u8>,
+) -> Option<&'a [u8]> {
     let width = frame.width() as usize;
     let height = frame.height() as usize;
     let pitch = frame.pitch();
@@ -691,8 +760,7 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
         return None;
     }
 
-    let data = frame.data();
-    let frame_len = data.len();
+    let frame_len = frame.data().len();
     let min_expected = height.checked_mul(pitch)?;
     if frame_len < min_expected {
         warn!(
@@ -708,10 +776,23 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
     }
 
     let out_len = width.checked_mul(height)?.checked_mul(4)?;
-    out.resize(out_len, 0);
     match frame.format() {
         RetroPixelFormat::Xrgb8888 => {
             let expected_row_bytes = width.checked_mul(4)?;
+            if pitch == expected_row_bytes {
+                let data = frame.data_mut();
+                if data.len() < out_len {
+                    return None;
+                }
+                for pixel in data[..out_len].chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                    pixel[3] = 255;
+                }
+                return Some(&frame.data()[..out_len]);
+            }
+
+            out.resize(out_len, 0);
+            let data = frame.data();
             for y in 0..height {
                 let row_start = y.checked_mul(pitch)?;
                 let row_end = row_start.checked_add(expected_row_bytes)?;
@@ -728,10 +809,12 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
                     out[dst_base + 3] = 255;
                 }
             }
-            Some(())
+            Some(out.as_slice())
         }
         RetroPixelFormat::Rgb565 => {
             let expected_row_bytes = width.checked_mul(2)?;
+            out.resize(out_len, 0);
+            let data = frame.data();
             for y in 0..height {
                 let row_start = y.checked_mul(pitch)?;
                 let row_end = row_start.checked_add(expected_row_bytes)?;
@@ -755,10 +838,12 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
                     out[dst_base + 3] = 255;
                 }
             }
-            Some(())
+            Some(out.as_slice())
         }
         RetroPixelFormat::Rgb1555 => {
             let expected_row_bytes = width.checked_mul(2)?;
+            out.resize(out_len, 0);
+            let data = frame.data();
             for y in 0..height {
                 let row_start = y.checked_mul(pitch)?;
                 let row_end = row_start.checked_add(expected_row_bytes)?;
@@ -782,7 +867,7 @@ pub(crate) fn fill_rgba_buffer_from_frame(frame: &VideoFrame, out: &mut Vec<u8>)
                     out[dst_base + 3] = 255;
                 }
             }
-            Some(())
+            Some(out.as_slice())
         }
         RetroPixelFormat::Unknown(format) => {
             warn!(
@@ -891,5 +976,21 @@ mod tests {
             H264_SDP_FMTP_LINE,
             "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
         );
+    }
+
+    #[test]
+    fn encoder_bitrate_scales_down_with_frame_interval() {
+        let fast = calculate_encoder_bitrate_bps(EncodeSettings {
+            width: 960,
+            height: 540,
+            frame_interval_ms: VIDEO_FRAME_INTERVAL_MS_MIN,
+        });
+        let slow = calculate_encoder_bitrate_bps(EncodeSettings {
+            width: 960,
+            height: 540,
+            frame_interval_ms: VIDEO_FRAME_INTERVAL_MS_MAX,
+        });
+
+        assert!(slow < fast);
     }
 }

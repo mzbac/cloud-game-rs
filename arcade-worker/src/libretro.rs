@@ -195,6 +195,10 @@ impl VideoFrame {
     pub fn data(&self) -> &[u8] {
         &self.data
     }
+
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        &mut self.data
+    }
 }
 
 #[derive(Debug)]
@@ -340,6 +344,7 @@ pub struct CoreCallbacks {
     pub input_state: Option<RetroInputStateCallback>,
     pub audio_sample: Option<RetroAudioSampleCallback>,
     pub audio_sample_batch: Option<RetroAudioSampleBatchCallback>,
+    pub should_emit_video: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub on_video_frame: Option<Arc<dyn Fn(VideoFrame) + Send + Sync>>,
     pub on_audio_frame: Option<Arc<dyn Fn(AudioFrame) + Send + Sync>>,
 }
@@ -353,6 +358,7 @@ impl Default for CoreCallbacks {
             input_state: None,
             audio_sample: None,
             audio_sample_batch: None,
+            should_emit_video: None,
             on_video_frame: None,
             on_audio_frame: None,
         }
@@ -562,6 +568,14 @@ impl CallbackContext {
         }
     }
 
+    fn should_emit_video(&self) -> bool {
+        self.callbacks
+            .read()
+            .ok()
+            .and_then(|callbacks| callbacks.should_emit_video.as_ref().map(|cb| cb()))
+            .unwrap_or(true)
+    }
+
     fn emit_audio(&self, frame: AudioFrame) {
         if let Some(cb) = self.callbacks.read().ok().and_then(|x| x.on_audio_frame.clone()) {
             cb(frame);
@@ -741,6 +755,10 @@ unsafe extern "C" fn video_refresh_callback(data: *const c_void, width: c_uint, 
 
     let bytes = pitch.saturating_mul(height as usize);
     if bytes == 0 {
+        return;
+    }
+
+    if !context.should_emit_video() {
         return;
     }
 

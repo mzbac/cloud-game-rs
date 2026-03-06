@@ -3,7 +3,7 @@ use super::video_sender::{fill_rgba_buffer_from_frame, h264_contains_idr};
 
 #[test]
 fn rgba_from_xrgb8888_converts_bgrx_to_rgba() {
-    let frame = VideoFrame::new(
+    let mut frame = VideoFrame::new(
         worker::RetroPixelFormat::Xrgb8888,
         2,
         1,
@@ -15,8 +15,8 @@ fn rgba_from_xrgb8888_converts_bgrx_to_rgba() {
     );
 
     let mut out = Vec::new();
-    assert!(fill_rgba_buffer_from_frame(&frame, &mut out).is_some());
-    assert_eq!(out, vec![0xff, 0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff]);
+    let rgba = fill_rgba_buffer_from_frame(&mut frame, &mut out).expect("rgba");
+    assert_eq!(rgba, &[0xff, 0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff]);
 }
 
 #[test]
@@ -26,13 +26,13 @@ fn rgba_from_rgb565_converts_to_rgba() {
         data.extend_from_slice(&raw.to_le_bytes());
     }
 
-    let frame = VideoFrame::new(worker::RetroPixelFormat::Rgb565, 3, 1, 6, data);
+    let mut frame = VideoFrame::new(worker::RetroPixelFormat::Rgb565, 3, 1, 6, data);
 
     let mut out = Vec::new();
-    assert!(fill_rgba_buffer_from_frame(&frame, &mut out).is_some());
+    let rgba = fill_rgba_buffer_from_frame(&mut frame, &mut out).expect("rgba");
     assert_eq!(
-        out,
-        vec![
+        rgba,
+        &[
             0xff, 0x00, 0x00, 0xff, // red
             0x00, 0xff, 0x00, 0xff, // green
             0x00, 0x00, 0xff, 0xff, // blue
@@ -47,13 +47,13 @@ fn rgba_from_rgb1555_converts_to_rgba() {
         data.extend_from_slice(&raw.to_le_bytes());
     }
 
-    let frame = VideoFrame::new(worker::RetroPixelFormat::Rgb1555, 3, 1, 6, data);
+    let mut frame = VideoFrame::new(worker::RetroPixelFormat::Rgb1555, 3, 1, 6, data);
 
     let mut out = Vec::new();
-    assert!(fill_rgba_buffer_from_frame(&frame, &mut out).is_some());
+    let rgba = fill_rgba_buffer_from_frame(&mut frame, &mut out).expect("rgba");
     assert_eq!(
-        out,
-        vec![
+        rgba,
+        &[
             0xff, 0x00, 0x00, 0xff, // red
             0x00, 0xff, 0x00, 0xff, // green
             0x00, 0x00, 0xff, 0xff, // blue
@@ -63,7 +63,7 @@ fn rgba_from_rgb1555_converts_to_rgba() {
 
 #[test]
 fn rgba_from_frame_rejects_short_stride() {
-    let frame = VideoFrame::new(
+    let mut frame = VideoFrame::new(
         worker::RetroPixelFormat::Xrgb8888,
         1,
         2,
@@ -72,7 +72,7 @@ fn rgba_from_frame_rejects_short_stride() {
     );
 
     let mut out = Vec::new();
-    assert!(fill_rgba_buffer_from_frame(&frame, &mut out).is_none());
+    assert!(fill_rgba_buffer_from_frame(&mut frame, &mut out).is_none());
 }
 
 #[test]
