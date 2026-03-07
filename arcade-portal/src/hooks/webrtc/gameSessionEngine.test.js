@@ -210,7 +210,7 @@ describe("startWebRtcGameSession ICE candidate ordering", () => {
     expect(captured.lastPeerConnection).not.toBeNull();
 
     const candidateInit = {
-      candidate: "candidate:0 1 UDP 2122252543 192.168.1.35 51372 typ host",
+      candidate: "candidate:0 1 UDP 2122252543 203.0.113.10 51372 typ host",
       sdpMid: "0",
       sdpMLineIndex: 0,
     };

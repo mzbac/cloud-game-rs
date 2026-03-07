@@ -1,6 +1,7 @@
 import React, { useContext } from "react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 const captured = vi.hoisted(() => ({
   config: null,
@@ -9,6 +10,7 @@ const captured = vi.hoisted(() => ({
 
 vi.mock("./protocol", () => ({
   resolveSignalingUrl: vi.fn(() => "ws://example/ws"),
+  resolveSnapshotUrl: vi.fn(() => "http://example/snapshot"),
   redactSignalingUrlForLog: vi.fn((url) => url),
 }));
 
@@ -28,9 +30,27 @@ vi.mock("../utils/log", () => ({
 import { AppDataContext, AppDataProvider } from "./index.jsx";
 
 describe("AppDataProvider", () => {
-  it("creates a signaling connection and updates state via callbacks", async () => {
+  beforeEach(() => {
     captured.config = null;
     captured.close.mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          games: { "room-1": "ssriders" },
+          playerCountsByRoom: { "room-1": 2 },
+        }),
+      }))
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses snapshot polling on the home route without opening a websocket", async () => {
+    captured.config = null;
 
     let latestState = null;
 
@@ -40,10 +60,38 @@ describe("AppDataProvider", () => {
       return null;
     }
 
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <AppDataProvider>
+          <CaptureState />
+        </AppDataProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://example/snapshot", { cache: "no-store" }));
+    expect(captured.config).toBeNull();
+    await waitFor(() => {
+      expect(latestState.conn).toBeNull();
+      expect(latestState.games).toEqual({ "room-1": "ssriders" });
+      expect(latestState.playerCountsByRoom).toEqual({ "room-1": 2 });
+    });
+  });
+
+  it("creates a signaling connection on the game route and updates state via callbacks", async () => {
+    let latestState = null;
+
+    function CaptureState() {
+      const { state } = useContext(AppDataContext);
+      latestState = state;
+      return null;
+    }
+
     const { unmount } = render(
-      <AppDataProvider>
-        <CaptureState />
-      </AppDataProvider>
+      <MemoryRouter initialEntries={["/game/room-1"]}>
+        <AppDataProvider>
+          <CaptureState />
+        </AppDataProvider>
+      </MemoryRouter>
     );
 
     await waitFor(() => expect(captured.config).not.toBeNull());
@@ -82,4 +130,3 @@ describe("AppDataProvider", () => {
     expect(captured.close).toHaveBeenCalledTimes(1);
   });
 });
-

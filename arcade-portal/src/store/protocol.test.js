@@ -2,6 +2,7 @@ import {
   parseSignalMessage,
   redactUrlQueryParamForLog,
   resolveSignalingUrl,
+  resolveSnapshotUrl,
 } from "./protocol";
 
 const setEnv = (key, value) => {
@@ -56,6 +57,12 @@ describe("protocol helpers", () => {
       expect(resolveSignalingUrl()).toBe(
         `ws://${window.location.host}/ws?token=abc`
       );
+    });
+
+    it("derives the snapshot URL from the signaling URL", () => {
+      setEnv("REACT_APP_SIGNALING_URL", "/ws");
+      setEnv("REACT_APP_SIGNALING_TOKEN", "");
+      expect(resolveSnapshotUrl()).toBe(`http://${window.location.host}/snapshot`);
     });
   });
 

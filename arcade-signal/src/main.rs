@@ -13,7 +13,7 @@ use tower_http::services::ServeDir;
 use tracing::{error, info};
 
 use crate::config::{init_logging, AppConfig};
-use crate::ws::{browser_ws, worker_ws, AppState};
+use crate::ws::{browser_snapshot, browser_ws, worker_ws, AppState};
 
 #[tokio::main]
 async fn main() {
@@ -42,6 +42,7 @@ async fn main() {
     ));
     let app = Router::new()
         .route("/", get(|| async { "arcade rust signaling server".to_string() }))
+        .route("/snapshot", get(browser_snapshot))
         .route("/ws", get(browser_ws))
         .route("/wws", get(worker_ws))
         .route(

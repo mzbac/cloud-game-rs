@@ -7,9 +7,11 @@ use arcade_signal_protocol::SignalMessage;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::Json;
 use axum::response::{IntoResponse, Response};
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use serde::Deserialize;
+use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -102,13 +104,36 @@ impl AppState {
     }
 
     async fn send_browser_initial_state(&self, tx: &Tx) {
-        let payload = self.registry.games_payload(self.dedupe_rooms_by_game).await;
-        let _ = tx.send(OutboundEvent::Message(games_message(payload)));
+        let snapshot = self.browser_snapshot_payload().await;
+        let games_payload = snapshot
+            .get("games")
+            .cloned()
+            .unwrap_or_else(|| json!({}))
+            .to_string();
+        let _ = tx.send(OutboundEvent::Message(games_message(games_payload)));
 
         for (worker_id, count) in self.registry.player_counts_snapshot().await {
             let msg = update_player_count_message(worker_id, count);
             let _ = tx.send(OutboundEvent::Message(msg));
         }
+    }
+
+    async fn browser_snapshot_payload(&self) -> Value {
+        let games_raw = self.registry.games_payload(self.dedupe_rooms_by_game).await;
+        let games = serde_json::from_str::<Value>(&games_raw).unwrap_or_else(|_| json!({}));
+
+        let player_counts = self
+            .registry
+            .player_counts_snapshot()
+            .await
+            .into_iter()
+            .map(|(worker_id, count)| (worker_id, Value::from(count)))
+            .collect::<Map<String, Value>>();
+
+        json!({
+            "games": games,
+            "playerCountsByRoom": player_counts,
+        })
     }
 
     async fn handle_browser_message(&self, client_id: &str, req: SignalMessage) {
@@ -274,6 +299,18 @@ pub async fn browser_ws(
     }
 
     ws.on_upgrade(move |socket| run_peer_socket(socket, state, PeerRole::Browser))
+}
+
+pub async fn browser_snapshot(
+    State(state): State<SharedState>,
+    Query(query): Query<WsAuthQuery>,
+) -> Response {
+    if !state.is_token_valid(query.token.as_deref()) {
+        warn!("blocked snapshot request with invalid token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    Json(state.browser_snapshot_payload().await).into_response()
 }
 
 pub async fn worker_ws(

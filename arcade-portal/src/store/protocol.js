@@ -143,4 +143,20 @@ export const resolveSignalingUrl = () => {
   }
 };
 
+export const resolveSnapshotUrl = () => {
+  const signalingUrl = resolveSignalingUrl();
+
+  try {
+    const parsed = new URL(signalingUrl);
+    parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
+    parsed.pathname = parsed.pathname.replace(/\/w?ws$/, "/snapshot");
+    return parsed.toString();
+  } catch {
+    return signalingUrl
+      .replace(/^wss:/i, "https:")
+      .replace(/^ws:/i, "http:")
+      .replace(/\/w?ws(\?|$)/, "/snapshot$1");
+  }
+};
+
 export const redactSignalingUrlForLog = (url) => redactUrlQueryParamForLog(url, "token");
