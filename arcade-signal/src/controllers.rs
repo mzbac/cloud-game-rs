@@ -1,9 +1,20 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::io::Read;
 
 use tokio::sync::Mutex;
 
 pub const JOIN_CODE_TTL: Duration = Duration::from_secs(15 * 60);
+const JOIN_CODE_LENGTH: usize = 6;
+const JOIN_CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const MAX_JOIN_CODE_ATTEMPTS: usize = 128;
+
+static JOIN_CODE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct Controllers {
     inner: Mutex<ControllerState>,
@@ -195,33 +206,65 @@ impl ControllerState {
     }
 
     fn next_available_code(&self) -> String {
-        for raw in 1..=99 {
-            let code = format!("{raw:02}");
+        for _ in 0..MAX_JOIN_CODE_ATTEMPTS {
+            let code = encode_join_code(next_join_code_seed());
             if !self.code_to_host.contains_key(&code) {
                 return code;
             }
         }
 
-        for raw in 100..=999 {
-            let code = raw.to_string();
+        let mut seed = next_join_code_seed();
+        loop {
+            let code = encode_join_code(seed);
             if !self.code_to_host.contains_key(&code) {
                 return code;
             }
+            seed = seed.wrapping_add(1);
         }
-
-        for raw in 1..=9_999 {
-            let code = format!("{raw:04}");
-            if !self.code_to_host.contains_key(&code) {
-                return code;
-            }
-        }
-
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|time| time.as_nanos())
-            .unwrap_or(0);
-        format!("{:06}", nanos % 1_000_000)
     }
+}
+
+fn next_join_code_seed() -> u64 {
+    random_seed_from_os().unwrap_or_else(fallback_join_code_seed)
+}
+
+#[cfg(unix)]
+fn random_seed_from_os() -> Option<u64> {
+    let mut bytes = [0u8; 8];
+    let mut file = File::open("/dev/urandom").ok()?;
+    file.read_exact(&mut bytes).ok()?;
+    Some(u64::from_le_bytes(bytes))
+}
+
+#[cfg(not(unix))]
+fn random_seed_from_os() -> Option<u64> {
+    None
+}
+
+fn fallback_join_code_seed() -> u64 {
+    let counter = JOIN_CODE_COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|time| time.as_nanos())
+        .unwrap_or(0);
+    mix_seed(counter ^ nanos as u64 ^ (nanos >> 64) as u64)
+}
+
+fn mix_seed(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn encode_join_code(mut value: u64) -> String {
+    let mut out = [JOIN_CODE_ALPHABET[0]; JOIN_CODE_LENGTH];
+    for idx in (0..JOIN_CODE_LENGTH).rev() {
+        let alphabet_index = (value % JOIN_CODE_ALPHABET.len() as u64) as usize;
+        out[idx] = JOIN_CODE_ALPHABET[alphabet_index];
+        value /= JOIN_CODE_ALPHABET.len() as u64;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -250,5 +293,15 @@ mod tests {
             controllers.worker_for_input(controller, host).await,
             Some("worker-2".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn host_registration_uses_six_character_join_codes() {
+        let controllers = Controllers::new();
+
+        let code = controllers.register_host("host-a", "worker-1").await;
+
+        assert_eq!(code.len(), JOIN_CODE_LENGTH);
+        assert!(code.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit()));
     }
 }

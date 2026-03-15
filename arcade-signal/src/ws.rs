@@ -74,6 +74,12 @@ impl AppState {
         origin.is_some_and(|value| allowed.contains(value))
     }
 
+    async fn is_client_bound_to_worker(&self, client_id: &str, worker_id: &str) -> bool {
+        self.registry
+            .is_client_bound_to_worker(client_id, worker_id)
+            .await
+    }
+
     async fn send_to_worker(&self, worker_id: &str, msg: SignalMessage) {
         if let Some(tx) = self.registry.worker_sender(worker_id).await {
             if let Err(err) = tx.send(OutboundEvent::Message(msg)) {
@@ -149,15 +155,45 @@ impl AppState {
                 bind_client,
             }) => {
                 if bind_client {
+                    if self.registry.worker_sender(&worker_id).await.is_none() {
+                        warn!(
+                            "blocked browser bind from {} to unknown worker {}",
+                            client_id, worker_id
+                        );
+                        return;
+                    }
                     self.registry.bind_client_to_worker(client_id, &worker_id).await;
+                } else if !self.is_client_bound_to_worker(client_id, &worker_id).await {
+                    warn!(
+                        "blocked browser relay route {} -> {} without matching worker binding",
+                        client_id, worker_id
+                    );
+                    return;
                 }
                 let msg = forward_to_worker_message(event, client_id.to_string(), data);
                 self.send_to_worker(&worker_id, msg).await;
             }
             Ok(BrowserCommand::TerminateSession { worker_id }) => {
-                let worker_id = match worker_id {
-                    Some(worker_id) => Some(worker_id),
-                    None => self.registry.worker_for_client(client_id).await,
+                let bound_worker_id = self.registry.worker_for_client(client_id).await;
+                let worker_id = match (worker_id, bound_worker_id) {
+                    (Some(worker_id), Some(bound_worker_id)) if worker_id == bound_worker_id => {
+                        Some(bound_worker_id)
+                    }
+                    (Some(worker_id), Some(bound_worker_id)) => {
+                        warn!(
+                            "blocked terminate route {} -> {} (bound to {})",
+                            client_id, worker_id, bound_worker_id
+                        );
+                        None
+                    }
+                    (Some(worker_id), None) => {
+                        warn!(
+                            "blocked terminate route {} -> {} without worker binding",
+                            client_id, worker_id
+                        );
+                        None
+                    }
+                    (None, bound_worker_id) => bound_worker_id,
                 };
                 if let Some(worker_id) = worker_id {
                     self.send_to_worker(&worker_id, terminate_session_message(client_id))
@@ -166,6 +202,13 @@ impl AppState {
                 }
             }
             Ok(BrowserCommand::ControllerHost { worker_id }) => {
+                if !self.is_client_bound_to_worker(client_id, &worker_id).await {
+                    warn!(
+                        "blocked controller host registration {} -> {} without matching worker binding",
+                        client_id, worker_id
+                    );
+                    return;
+                }
                 let code = self.controllers.register_host(client_id, &worker_id).await;
                 let payload = serde_json::json!({
                     "code": code,
@@ -450,4 +493,171 @@ fn next_session_id() -> String {
         .map(|time| time.as_nanos())
         .unwrap_or(0);
     format!("{:x}-{:x}", nanos, seq)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arcade_signal_protocol::ids as signal_ids;
+    use tokio::sync::mpsc;
+    use tokio::sync::mpsc::error::TryRecvError;
+
+    async fn register_worker(state: &AppState, worker_id: &str) -> mpsc::UnboundedReceiver<OutboundEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        state.registry.register_worker(worker_id.to_string(), tx).await;
+        rx
+    }
+
+    async fn register_client(state: &AppState, client_id: &str) -> mpsc::UnboundedReceiver<OutboundEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        state.registry.register_client(client_id.to_string(), tx).await;
+        rx
+    }
+
+    #[tokio::test]
+    async fn unbound_browser_input_is_blocked() {
+        let state = AppState::new(None, None, false);
+        let client_id = "client-a";
+        let worker_id = "worker-a";
+        let mut worker_rx = register_worker(&state, worker_id).await;
+
+        state
+            .handle_browser_message(
+                client_id,
+                SignalMessage::with_payload(
+                    signal_ids::INPUT,
+                    Some(worker_id.to_string()),
+                    Some("AQI=".to_string()),
+                ),
+            )
+            .await;
+
+        assert!(matches!(worker_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn bound_browser_input_is_forwarded() {
+        let state = AppState::new(None, None, false);
+        let client_id = "client-a";
+        let worker_id = "worker-a";
+        let mut worker_rx = register_worker(&state, worker_id).await;
+        state.registry.bind_client_to_worker(client_id, worker_id).await;
+
+        state
+            .handle_browser_message(
+                client_id,
+                SignalMessage::with_payload(
+                    signal_ids::INPUT,
+                    Some(worker_id.to_string()),
+                    Some("AQI=".to_string()),
+                ),
+            )
+            .await;
+
+        let forwarded = worker_rx.try_recv().expect("expected worker message");
+        match forwarded {
+            OutboundEvent::Message(msg) => {
+                assert_eq!(msg.id, signal_ids::INPUT);
+                assert_eq!(msg.session_id.as_deref(), Some(client_id));
+                assert_eq!(msg.data.as_deref(), Some("AQI="));
+            }
+            OutboundEvent::Close => panic!("expected message event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_bind_to_unknown_worker_is_blocked() {
+        let state = AppState::new(None, None, false);
+        let client_id = "client-a";
+
+        state
+            .handle_browser_message(
+                client_id,
+                SignalMessage::with_payload(
+                    signal_ids::INIT_WEBRTC,
+                    Some("worker-missing".to_string()),
+                    None,
+                ),
+            )
+            .await;
+
+        assert_eq!(state.registry.worker_for_client(client_id).await, None);
+    }
+
+    #[tokio::test]
+    async fn controller_host_requires_matching_worker_binding() {
+        let state = AppState::new(None, None, false);
+        let client_id = "client-a";
+        let worker_id = "worker-a";
+        let mut client_rx = register_client(&state, client_id).await;
+        let _worker_rx = register_worker(&state, worker_id).await;
+
+        state
+            .handle_browser_message(
+                client_id,
+                SignalMessage::with_payload(
+                    signal_ids::CONTROLLER_HOST,
+                    Some(worker_id.to_string()),
+                    None,
+                ),
+            )
+            .await;
+
+        assert!(matches!(client_rx.try_recv(), Err(TryRecvError::Empty)));
+
+        state.registry.bind_client_to_worker(client_id, worker_id).await;
+        state
+            .handle_browser_message(
+                client_id,
+                SignalMessage::with_payload(
+                    signal_ids::CONTROLLER_HOST,
+                    Some(worker_id.to_string()),
+                    None,
+                ),
+            )
+            .await;
+
+        let ready = client_rx.try_recv().expect("expected controller ready");
+        match ready {
+            OutboundEvent::Message(msg) => {
+                assert_eq!(msg.id, signal_ids::CONTROLLER_READY);
+                let payload = serde_json::from_str::<Value>(msg.data.as_deref().unwrap_or("{}"))
+                    .expect("controller ready payload should be json");
+                assert_eq!(payload.get("workerID").and_then(Value::as_str), Some(worker_id));
+                let code = payload.get("code").and_then(Value::as_str).unwrap_or_default();
+                assert_eq!(code.len(), 6);
+            }
+            OutboundEvent::Close => panic!("expected message event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn terminate_with_mismatched_worker_target_is_blocked() {
+        let state = AppState::new(None, None, false);
+        let client_id = "client-a";
+        let worker_id = "worker-a";
+        let other_worker_id = "worker-b";
+        let mut worker_rx = register_worker(&state, worker_id).await;
+        let mut other_worker_rx = register_worker(&state, other_worker_id).await;
+        state.registry.bind_client_to_worker(client_id, worker_id).await;
+
+        state
+            .handle_browser_message(
+                client_id,
+                SignalMessage::with_payload(
+                    signal_ids::TERMINATE_SESSION,
+                    Some(other_worker_id.to_string()),
+                    None,
+                ),
+            )
+            .await;
+
+        assert!(matches!(worker_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(matches!(other_worker_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(
+            state.registry.worker_for_client(client_id).await,
+            Some(worker_id.to_string())
+        );
+    }
 }

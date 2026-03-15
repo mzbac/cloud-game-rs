@@ -104,6 +104,14 @@ impl Registry {
         state.client_to_worker.get(client_id).cloned()
     }
 
+    pub async fn is_client_bound_to_worker(&self, client_id: &str, worker_id: &str) -> bool {
+        let state = self.inner.lock().await;
+        state
+            .client_to_worker
+            .get(client_id)
+            .is_some_and(|bound_worker_id| bound_worker_id == worker_id)
+    }
+
     pub async fn client_sender(&self, client_id: &str) -> Option<Tx> {
         let state = self.inner.lock().await;
         state.clients.get(client_id).cloned()
