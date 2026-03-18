@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
   && mkdir -p /out \
   && cp "target/release/${SERVICE_BINARY}" "/out/${SERVICE_BINARY}"
 
-FROM docker.io/library/debian:12-slim
+FROM docker.io/library/debian:13-slim
 WORKDIR /app
 ARG SERVICE_BINARY=signal
 
