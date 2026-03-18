@@ -17,7 +17,7 @@ ENV REACT_APP_SIGNALING_TOKEN=${REACT_APP_SIGNALING_TOKEN}
 ENV NODE_ENV=production
 RUN npm run build
 
-FROM docker.io/library/nginx:1.27-alpine
+FROM docker.io/library/nginx:1.29-alpine
 WORKDIR /usr/share/nginx/html
 RUN apk add --no-cache curl
 ARG SIGNAL_BACKEND_HOST=signal
