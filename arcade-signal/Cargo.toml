@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 arcade-signal-protocol = { path = "../arcade-signal-protocol" }
-axum = { version = "0.7", features = ["ws", "tokio"] }
+axum = { version = "0.8", features = ["ws", "tokio"] }
 base64 = "0.22"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
