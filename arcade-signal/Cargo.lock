@@ -12,18 +12,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "arcade-signal-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "arcade-signal"
 version = "0.1.0"
 dependencies = [
  "arcade-signal-protocol",
  "axum",
+ "base64",
  "futures-util",
  "serde",
  "serde_json",
@@ -31,6 +25,13 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "arcade-signal-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -834,12 +835,13 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.5.2"
+version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e9cd434a998747dd2c4276bc96ee2e0c7a2eadf3cae88e52be55a05fa9053f5"
+checksum = "d4e6559d53cc268e5031cd8429d05415bc4cb4aefc4aa5d6cc35fbf5b924a1f8"
 dependencies = [
  "bitflags",
  "bytes",
+ "futures-core",
  "futures-util",
  "http",
  "http-body",
