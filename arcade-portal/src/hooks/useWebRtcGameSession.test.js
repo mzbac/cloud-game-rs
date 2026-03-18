@@ -7,15 +7,18 @@ const captured = vi.hoisted(() => ({
   lastArgs: null,
 }));
 
-vi.mock("./webrtc/gameSessionEngine", () => ({
-  startWebRtcGameSession: (args) => {
+vi.mock("./webrtc/gameSessionRuntime", () => ({
+  createGameSessionRuntime: (args) => {
     captured.lastArgs = args;
     args.setConnectionState("connected");
     args.setHasMedia(true);
     args.setVideoStalled(false);
     args.setAudioStatus("running");
-    args.resumeAudioRef.current = captured.resumeFn;
-    return captured.cleanupFn;
+    return {
+      start: vi.fn(),
+      dispose: captured.cleanupFn,
+      resumeAudio: captured.resumeFn,
+    };
   },
 }));
 
@@ -50,7 +53,7 @@ describe("useWebRtcGameSession", () => {
     expect(result.current.audioStatus).toBe("running");
     expect(captured.lastArgs).not.toBeNull();
     expect(typeof captured.lastArgs.setConnectionState).toBe("function");
-    expect(typeof captured.lastArgs.resumeAudioRef).toBe("object");
+    expect(typeof captured.lastArgs.setAudioStatus).toBe("function");
 
     act(() => {
       result.current.resumeAudio();
@@ -64,4 +67,3 @@ describe("useWebRtcGameSession", () => {
     expect(captured.cleanupFn).toHaveBeenCalledTimes(2);
   });
 });
-

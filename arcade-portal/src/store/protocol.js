@@ -64,22 +64,19 @@ export const parseSignalMessage = (raw) => {
     return null;
   }
 
+  const targetID = typeof parsed.sessionID === "string" ? parsed.sessionID : undefined;
+
   return {
     id: parsed.id,
     data: typeof parsed.data === "string" ? parsed.data : "",
-    sessionID:
-      typeof parsed.sessionID === "string"
-        ? parsed.sessionID
-        : typeof parsed.session_id === "string"
-          ? parsed.session_id
-          : undefined,
+    targetID,
   };
 };
 
-export const buildSignalingMessage = ({ id, data, sessionID }) => ({
+export const buildSignalingMessage = ({ id, data, targetID }) => ({
   id,
   ...(data !== undefined ? { data } : {}),
-  ...(sessionID !== undefined ? { sessionID } : {}),
+  ...(targetID !== undefined ? { sessionID: targetID } : {}),
 });
 
 export const redactUrlQueryParamForLog = (rawUrl, key) => {

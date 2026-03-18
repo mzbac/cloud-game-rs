@@ -13,17 +13,17 @@ pub(crate) fn spawn_emulator_thread(mut core: Core, fps: f64, input_receiver: Re
     let idle_tick = Duration::from_millis(50);
     thread::spawn(move || loop {
         while let Ok(input) = input_receiver.try_recv() {
-            if let Some(player) = room.player_index_for_session(&input.session_id) {
+            if let Some(player) = room.player_index_for_client(&input.client_id) {
                 if let Err(err) = core.update_input_state(player, &input.data) {
                     warn!(
-                        session_id = input.session_id,
+                        client_id = input.client_id,
                         player,
                         error = %err,
                         "input update error"
                     );
                 }
             } else {
-                room.queue_pending_input(&input.session_id, input.data);
+                room.queue_pending_input(&input.client_id, input.data);
             }
         }
 

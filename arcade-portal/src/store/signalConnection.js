@@ -165,7 +165,7 @@ export const createSignalConnection = ({
       if (msg.id === SIGNALING_MESSAGE_IDS.UPDATE_PLAYER_COUNT) {
         if (typeof onPlayerCount === "function") {
           onPlayerCount({
-            roomId: msg.sessionID,
+            roomId: msg.targetID,
             count: msg.data,
           });
         }

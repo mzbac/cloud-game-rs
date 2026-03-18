@@ -3,7 +3,7 @@ import { SIGNALING_MESSAGE_IDS, buildSignalingMessage } from "./protocol";
 export const controllerHostMessage = (workerId) =>
   buildSignalingMessage({
     id: SIGNALING_MESSAGE_IDS.CONTROLLER_HOST,
-    sessionID: workerId,
+    targetID: workerId,
   });
 
 export const controllerJoinMessage = (code) =>
@@ -15,13 +15,13 @@ export const controllerJoinMessage = (code) =>
 export const controllerInputMessage = (hostClientId, payload) =>
   buildSignalingMessage({
     id: SIGNALING_MESSAGE_IDS.CONTROLLER_INPUT,
-    sessionID: hostClientId,
+    targetID: hostClientId,
     data: payload,
   });
 
 export const controllerAudioMessage = (hostClientId) =>
   buildSignalingMessage({
     id: SIGNALING_MESSAGE_IDS.CONTROLLER_AUDIO,
-    sessionID: hostClientId,
+    targetID: hostClientId,
     data: "enable",
   });

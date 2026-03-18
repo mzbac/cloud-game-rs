@@ -23,7 +23,7 @@ const AUDIO_CHANNEL_MAX_BUFFER_BYTES: usize = 128 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct InputEvent {
-    pub(crate) session_id: String,
+    pub(crate) client_id: String,
     pub(crate) data: Vec<u8>,
 }
 
@@ -56,6 +56,65 @@ pub(crate) struct VideoPressureSnapshot {
     pub(crate) max_queue_len: usize,
     pub(crate) congested_events: usize,
     pub(crate) dropped_frames: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct VideoSenderUpdate {
+    pub(crate) refresh_encoder: bool,
+    pub(crate) force_idr: bool,
+    pub(crate) pressure: VideoPressureSnapshot,
+}
+
+#[derive(Default)]
+struct VideoControl {
+    refresh_encoder: AtomicBool,
+    force_idr: AtomicBool,
+    max_queue_len: AtomicUsize,
+    congested_events: AtomicUsize,
+    dropped_frames: AtomicUsize,
+}
+
+impl VideoControl {
+    fn on_session_registered(&self) {
+        self.refresh_encoder.store(true, Ordering::Relaxed);
+    }
+
+    fn on_session_joined(&self, needs_refresh: bool) {
+        if needs_refresh {
+            self.refresh_encoder.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn on_keyframe_requested(&self) {
+        self.force_idr.store(true, Ordering::Relaxed);
+    }
+
+    fn record_pressure(&self, pressure: VideoPressureSnapshot) {
+        if pressure.max_queue_len > 0 {
+            self.max_queue_len
+                .fetch_max(pressure.max_queue_len, Ordering::Relaxed);
+        }
+        if pressure.congested_events > 0 {
+            self.congested_events
+                .fetch_add(pressure.congested_events, Ordering::Relaxed);
+        }
+        if pressure.dropped_frames > 0 {
+            self.dropped_frames
+                .fetch_add(pressure.dropped_frames, Ordering::Relaxed);
+        }
+    }
+
+    fn next_sender_update(&self) -> VideoSenderUpdate {
+        VideoSenderUpdate {
+            refresh_encoder: self.refresh_encoder.swap(false, Ordering::Relaxed),
+            force_idr: self.force_idr.swap(false, Ordering::Relaxed),
+            pressure: VideoPressureSnapshot {
+                max_queue_len: self.max_queue_len.swap(0, Ordering::Relaxed),
+                congested_events: self.congested_events.swap(0, Ordering::Relaxed),
+                dropped_frames: self.dropped_frames.swap(0, Ordering::Relaxed),
+            },
+        }
+    }
 }
 
 pub(crate) struct VideoSampleQueue {
@@ -201,16 +260,13 @@ impl Session {
 }
 
 #[derive(Clone)]
+/// Worker-side facade for active sessions, player assignment, and stream control.
 pub(crate) struct Room {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     session_count: Arc<AtomicUsize>,
     player_slots: Arc<Mutex<PlayerSlots>>,
     pending_inputs: Arc<Mutex<PendingInputs>>,
-    keyframe_refresh: Arc<AtomicBool>,
-    force_idr: Arc<AtomicBool>,
-    video_max_queue_len: Arc<AtomicUsize>,
-    video_congested_events: Arc<AtomicUsize>,
-    video_dropped_frames: Arc<AtomicUsize>,
+    video_control: Arc<VideoControl>,
     signal_tx: mpsc::UnboundedSender<SignalMessage>,
     worker_handle: Handle,
     audio_sample_rate: Arc<AtomicU32>,
@@ -223,11 +279,7 @@ impl Room {
             session_count: Arc::new(AtomicUsize::new(0)),
             player_slots: Arc::new(Mutex::new(PlayerSlots::new())),
             pending_inputs: Arc::new(Mutex::new(PendingInputs::default())),
-            keyframe_refresh: Arc::new(AtomicBool::new(false)),
-            force_idr: Arc::new(AtomicBool::new(false)),
-            video_max_queue_len: Arc::new(AtomicUsize::new(0)),
-            video_congested_events: Arc::new(AtomicUsize::new(0)),
-            video_dropped_frames: Arc::new(AtomicUsize::new(0)),
+            video_control: Arc::new(VideoControl::default()),
             signal_tx,
             worker_handle,
             audio_sample_rate: Arc::new(AtomicU32::new(48_000)),
@@ -238,27 +290,23 @@ impl Room {
         self.session_count.load(Ordering::Relaxed) > 0
     }
 
-    pub(crate) fn request_encoder_refresh(&self) {
-        self.keyframe_refresh.store(true, Ordering::Relaxed);
+    pub(crate) fn note_video_session_registered(&self) {
+        self.video_control.on_session_registered();
     }
 
-    pub(crate) fn request_idr(&self) {
-        self.force_idr.store(true, Ordering::Relaxed);
+    pub(crate) fn note_keyframe_requested(&self) {
+        self.video_control.on_keyframe_requested();
     }
 
-    pub(crate) fn take_video_pressure_snapshot(&self) -> VideoPressureSnapshot {
-        VideoPressureSnapshot {
-            max_queue_len: self.video_max_queue_len.swap(0, Ordering::Relaxed),
-            congested_events: self.video_congested_events.swap(0, Ordering::Relaxed),
-            dropped_frames: self.video_dropped_frames.swap(0, Ordering::Relaxed),
-        }
+    pub(crate) fn next_video_sender_update(&self) -> VideoSenderUpdate {
+        self.video_control.next_sender_update()
     }
 
-    pub(crate) fn with_session(&self, session_id: &str) -> Option<Arc<Session>> {
+    pub(crate) fn with_client_session(&self, client_id: &str) -> Option<Arc<Session>> {
         self.sessions
             .lock()
             .ok()
-            .and_then(|sessions| sessions.get(session_id).cloned())
+            .and_then(|sessions| sessions.get(client_id).cloned())
     }
 
     pub(crate) fn video_sessions(&self) -> Vec<Arc<Session>> {
@@ -272,66 +320,56 @@ impl Room {
             .unwrap_or_default()
     }
 
-    pub(crate) fn player_index_for_session(&self, session_id: &str) -> Option<usize> {
+    pub(crate) fn player_index_for_client(&self, client_id: &str) -> Option<usize> {
         self.player_slots
             .lock()
             .ok()
-            .and_then(|slots| slots.slot_for(session_id))
+            .and_then(|slots| slots.slot_for_client(client_id))
     }
 
-    pub(crate) fn register_session(&self, session_id: String, session: Arc<Session>) -> bool {
+    pub(crate) fn register_client_session(&self, client_id: String, session: Arc<Session>) -> bool {
         let mut sessions = match self.sessions.lock() {
             Ok(guard) => guard,
             Err(_) => return false,
         };
-        if sessions.contains_key(&session_id) {
+        if sessions.contains_key(&client_id) {
             false
         } else {
-            sessions.insert(session_id, session);
+            sessions.insert(client_id, session);
             self.session_count.fetch_add(1, Ordering::Relaxed);
             true
         }
     }
 
-    pub(crate) fn join_room(&self, session_id: &str) -> Option<usize> {
-        let had_assignment = self.player_index_for_session(session_id).is_some();
-        let player_slot = self.assign_player_slot(session_id);
-        if !had_assignment {
-            self.request_encoder_refresh();
-        }
+    pub(crate) fn join_room(&self, client_id: &str) -> Option<usize> {
+        let had_assignment = self.player_index_for_client(client_id).is_some();
+        let player_slot = self.assign_player_slot(client_id);
+        self.video_control.on_session_joined(!had_assignment);
         player_slot
     }
 
-    pub(crate) fn ensure_session_joined(&self, session_id: &str) -> Option<usize> {
-        if let Some(existing_slot) = self.player_index_for_session(session_id) {
+    pub(crate) fn ensure_session_joined(&self, client_id: &str) -> Option<usize> {
+        if let Some(existing_slot) = self.player_index_for_client(client_id) {
             return Some(existing_slot);
         }
-        self.join_room(session_id)
+        self.join_room(client_id)
     }
 
-    pub(crate) fn take_keyframe_refresh(&self) -> bool {
-        self.keyframe_refresh.swap(false, Ordering::Relaxed)
-    }
-
-    pub(crate) fn take_force_idr(&self) -> bool {
-        self.force_idr.swap(false, Ordering::Relaxed)
-    }
-
-    pub(crate) fn assign_player_slot(&self, session_id: &str) -> Option<usize> {
+    pub(crate) fn assign_player_slot(&self, client_id: &str) -> Option<usize> {
         let mut slots = self.player_slots.lock().ok()?;
 
-        let (player_slot, is_new) = slots.assign(session_id);
+        let (player_slot, is_new) = slots.assign_client(client_id);
         if let Some(slot) = player_slot {
-            if let Some(session) = self.with_session(session_id) {
+            if let Some(session) = self.with_client_session(client_id) {
                 session.set_player(Some(slot));
             }
             if is_new {
-                info!(session_id, slot, "assigned player slot");
+                info!(client_id, slot, "assigned player slot");
             } else {
                 return Some(slot);
             }
         } else {
-            if let Some(session) = self.with_session(session_id) {
+            if let Some(session) = self.with_client_session(client_id) {
                 session.set_player(None);
             }
         }
@@ -341,10 +379,10 @@ impl Room {
         player_slot
     }
 
-    pub(crate) fn unregister_session(&self, session_id: &str) -> Option<Arc<Session>> {
+    pub(crate) fn unregister_client_session(&self, client_id: &str) -> Option<Arc<Session>> {
         let removed = {
             let mut sessions = self.sessions.lock().ok()?;
-            sessions.remove(session_id)
+            sessions.remove(client_id)
         };
         if removed.is_none() {
             return None;
@@ -357,7 +395,7 @@ impl Room {
 
         let mut count_changed = false;
         if let Ok(mut slots) = self.player_slots.lock() {
-            if slots.release(session_id) {
+            if slots.release_client(client_id) {
                 count_changed = true;
             }
             if let Some(session) = &removed {
@@ -377,16 +415,16 @@ impl Room {
         removed
     }
 
-    pub(crate) fn release_input_source(&self, session_id: &str) -> bool {
+    pub(crate) fn release_input_source(&self, client_id: &str) -> bool {
         if let Ok(mut pending) = self.pending_inputs.lock() {
-            pending.drain(session_id);
+            pending.drain_client(client_id);
         }
 
         let released = self
             .player_slots
             .lock()
             .ok()
-            .is_some_and(|mut slots| slots.release(session_id));
+            .is_some_and(|mut slots| slots.release_client(client_id));
 
         if released {
             let count = self
@@ -400,28 +438,28 @@ impl Room {
         released
     }
 
-    pub(crate) fn queue_pending_input(&self, session_id: &str, payload: Vec<u8>) {
+    pub(crate) fn queue_pending_input(&self, client_id: &str, payload: Vec<u8>) {
         let mut pending = match self.pending_inputs.lock() {
             Ok(guard) => guard,
             Err(_) => return,
         };
-        pending.queue(session_id, payload);
+        pending.queue_client(client_id, payload);
     }
 
-    pub(crate) fn drain_pending_inputs(&self, session_id: &str) -> Vec<Vec<u8>> {
+    pub(crate) fn drain_pending_inputs(&self, client_id: &str) -> Vec<Vec<u8>> {
         let mut pending = match self.pending_inputs.lock() {
             Ok(guard) => guard,
             Err(_) => return Vec::new(),
         };
-        pending.drain(session_id)
+        pending.drain_client(client_id)
     }
 
     pub(crate) fn flush_pending_inputs_to_sender(
         &self,
-        session_id: &str,
+        client_id: &str,
         input_sender: &Sender<InputEvent>,
     ) -> usize {
-        let pending = self.drain_pending_inputs(session_id);
+        let pending = self.drain_pending_inputs(client_id);
         if pending.is_empty() {
             return 0;
         }
@@ -430,12 +468,12 @@ impl Room {
         for payload in pending {
             if input_sender
                 .send(InputEvent {
-                    session_id: session_id.to_string(),
+                    client_id: client_id.to_string(),
                     data: payload,
                 })
                 .is_err()
             {
-                warn!(session_id, "failed to send queued input");
+                warn!(client_id, "failed to send queued input");
                 break;
             }
             sent = sent.saturating_add(1);
@@ -445,22 +483,22 @@ impl Room {
 
     pub(crate) fn buffer_or_send_input(
         &self,
-        session_id: &str,
+        client_id: &str,
         payload: Vec<u8>,
         input_sender: &Sender<InputEvent>,
         source: &str,
     ) {
-        let already_assigned = self.player_index_for_session(session_id).is_some();
-        let slot = self.ensure_session_joined(session_id);
+        let already_assigned = self.player_index_for_client(client_id).is_some();
+        let slot = self.ensure_session_joined(client_id);
         if slot.is_none() {
             let players = self
                 .player_slots
                 .lock()
                 .map(|slots| slots.count())
                 .unwrap_or(0);
-            self.queue_pending_input(session_id, payload);
+            self.queue_pending_input(client_id, payload);
             debug!(
-                session_id,
+                client_id,
                 source, players, "queued input for unassigned session"
             );
             return;
@@ -468,15 +506,15 @@ impl Room {
         let slot = slot.unwrap_or_default();
 
         if !already_assigned {
-            let flushed = self.flush_pending_inputs_to_sender(session_id, input_sender);
-            debug!(session_id, slot, flushed, "flushed pending inputs");
+            let flushed = self.flush_pending_inputs_to_sender(client_id, input_sender);
+            debug!(client_id, slot, flushed, "flushed pending inputs");
         }
 
         if let Err(err) = input_sender.send(InputEvent {
-            session_id: session_id.to_string(),
+            client_id: client_id.to_string(),
             data: payload,
         }) {
-            warn!(session_id, slot, source, error = %err, "failed to enqueue input");
+            warn!(client_id, slot, source, error = %err, "failed to enqueue input");
         }
     }
 
@@ -542,18 +580,7 @@ impl Room {
                 .saturating_add(result.dropped_existing + usize::from(result.dropped_incoming));
         }
 
-        if pressure.max_queue_len > 0 {
-            self.video_max_queue_len
-                .fetch_max(pressure.max_queue_len, Ordering::Relaxed);
-        }
-        if pressure.congested_events > 0 {
-            self.video_congested_events
-                .fetch_add(pressure.congested_events, Ordering::Relaxed);
-        }
-        if pressure.dropped_frames > 0 {
-            self.video_dropped_frames
-                .fetch_add(pressure.dropped_frames, Ordering::Relaxed);
-        }
+        self.video_control.record_pressure(pressure);
     }
 
     pub(crate) fn broadcast_audio_frame(&self, encoded: &str) {
@@ -653,5 +680,34 @@ mod tests {
         assert!(result.was_full);
         assert_eq!(result.dropped_existing, 3);
         assert_eq!(queued_ids(&queue), vec![9]);
+    }
+
+    #[test]
+    fn video_control_coalesces_refresh_force_idr_and_pressure() {
+        let control = VideoControl::default();
+
+        control.on_session_registered();
+        control.on_session_joined(true);
+        control.on_keyframe_requested();
+        control.record_pressure(VideoPressureSnapshot {
+            max_queue_len: 3,
+            congested_events: 2,
+            dropped_frames: 5,
+        });
+
+        let first = control.next_sender_update();
+        assert!(first.refresh_encoder);
+        assert!(first.force_idr);
+        assert_eq!(
+            first.pressure,
+            VideoPressureSnapshot {
+                max_queue_len: 3,
+                congested_events: 2,
+                dropped_frames: 5,
+            }
+        );
+
+        let second = control.next_sender_update();
+        assert_eq!(second, VideoSenderUpdate::default());
     }
 }

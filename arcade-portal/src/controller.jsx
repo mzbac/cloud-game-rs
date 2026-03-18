@@ -314,10 +314,10 @@ function ControllerPage() {
       }
 
       if (msg.id === SIGNALING_MESSAGE_IDS.CONTROLLER_JOINED) {
-        if (!msg.sessionID) {
+        if (!msg.targetID) {
           return;
         }
-        hostIdRef.current = msg.sessionID;
+        hostIdRef.current = msg.targetID;
         lastSentMaskRef.current = -1;
         saveLastJoinCodeToStorage(joinCodeRef.current);
         setStatus("paired");

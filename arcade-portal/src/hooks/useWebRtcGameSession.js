@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { startWebRtcGameSession } from "./webrtc/gameSessionEngine";
+import { createGameSessionRuntime } from "./webrtc/gameSessionRuntime";
 
 export const useWebRtcGameSession = ({
   conn,
@@ -18,15 +18,15 @@ export const useWebRtcGameSession = ({
   const [hasMedia, setHasMedia] = useState(false);
   const [videoStalled, setVideoStalled] = useState(false);
   const [audioStatus, setAudioStatus] = useState("unknown");
-  const resumeAudioRef = useRef(null);
+  const runtimeRef = useRef(null);
 
   const resumeAudio = useCallback((event) => {
     const fromUserGesture = Boolean(event);
-    resumeAudioRef.current?.({ fromUserGesture });
+    runtimeRef.current?.resumeAudio({ fromUserGesture });
   }, []);
 
   useEffect(() => {
-    return startWebRtcGameSession({
+    const runtime = createGameSessionRuntime({
       conn,
       workerID,
       remoteVideoRef,
@@ -40,8 +40,15 @@ export const useWebRtcGameSession = ({
       setHasMedia,
       setVideoStalled,
       setAudioStatus,
-      resumeAudioRef,
     });
+    runtimeRef.current = runtime;
+    runtime.start();
+    return () => {
+      if (runtimeRef.current === runtime) {
+        runtimeRef.current = null;
+      }
+      runtime.dispose();
+    };
   }, [
     conn,
     remoteVideoRef,

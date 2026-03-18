@@ -2,6 +2,8 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use arcade_signal_protocol::{ids as signal_ids, SignalMessage};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -93,6 +95,14 @@ pub enum WorkerCommand {
 
 #[derive(Debug)]
 pub enum ProtocolError {
+    InvalidJson {
+        reason: String,
+    },
+    InvalidEnvelope,
+    InvalidPayload {
+        id: String,
+        reason: String,
+    },
     UnknownBrowserMessage {
         id: String,
     },
@@ -113,6 +123,11 @@ pub enum ProtocolError {
 impl Display for ProtocolError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidJson { reason } => write!(f, "invalid json payload: {reason}"),
+            Self::InvalidEnvelope => write!(f, "invalid signaling message envelope"),
+            Self::InvalidPayload { id, reason } => {
+                write!(f, "invalid payload for message '{id}': {reason}")
+            }
             Self::UnknownBrowserMessage { id } => write!(f, "unknown browser message id '{id}'"),
             Self::UnknownWorkerMessage { id } => write!(f, "unknown worker message id '{id}'"),
             Self::MissingTarget { id } => write!(f, "missing target for message '{id}'"),
@@ -125,6 +140,14 @@ impl Display for ProtocolError {
 }
 
 impl Error for ProtocolError {}
+
+pub fn parse_browser_message_text(text: &str) -> Result<SignalMessage, ProtocolError> {
+    parse_message_text(text)
+}
+
+pub fn parse_worker_message_text(text: &str) -> Result<SignalMessage, ProtocolError> {
+    parse_message_text(text)
+}
 
 pub fn parse_browser_command(req: SignalMessage) -> Result<BrowserCommand, ProtocolError> {
     let SignalMessage {
@@ -306,6 +329,23 @@ pub fn controller_audio_message(controller_client_id: String, action: String) ->
     }
 }
 
+fn parse_message_text(text: &str) -> Result<SignalMessage, ProtocolError> {
+    let value =
+        serde_json::from_str::<Value>(text).map_err(|err| ProtocolError::InvalidJson {
+            reason: err.to_string(),
+        })?;
+    let object = value.as_object().ok_or(ProtocolError::InvalidEnvelope)?;
+
+    let id = required_json_string(object, "id")
+        .ok_or(ProtocolError::InvalidEnvelope)?
+        .to_string();
+    let data = canonicalize_payload(&id, optional_json_string(object, "data"))?;
+    let session_id =
+        optional_json_string(object, "sessionID").or_else(|| optional_json_string(object, "session_id"));
+
+    Ok(SignalMessage { id, data, session_id })
+}
+
 fn required_target(id: &str, session_id: Option<String>) -> Result<String, ProtocolError> {
     optional_target(session_id).ok_or_else(|| ProtocolError::MissingTarget { id: id.to_string() })
 }
@@ -326,6 +366,119 @@ fn optional_payload(payload: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed.to_string())
     })
+}
+
+fn required_json_string<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn optional_json_string(object: &Map<String, Value>, key: &str) -> Option<String> {
+    required_json_string(object, key).map(ToOwned::to_owned)
+}
+
+fn canonicalize_payload(id: &str, payload: Option<String>) -> Result<Option<String>, ProtocolError> {
+    let Some(payload) = payload else {
+        return Ok(None);
+    };
+
+    let canonical = match id {
+        signal_ids::OFFER => canonicalize_session_description_payload(id, &payload)?,
+        signal_ids::ANSWER => canonicalize_session_description_payload(id, &payload)?,
+        signal_ids::CANDIDATE => canonicalize_candidate_payload(id, &payload)?,
+        _ => payload,
+    };
+
+    Ok(Some(canonical))
+}
+
+fn canonicalize_session_description_payload(id: &str, payload: &str) -> Result<String, ProtocolError> {
+    let expected_type = match id {
+        signal_ids::OFFER => "offer",
+        signal_ids::ANSWER => "answer",
+        _ => {
+            return Err(ProtocolError::InvalidPayload {
+                id: id.to_string(),
+                reason: "unsupported session description message".to_string(),
+            });
+        }
+    };
+
+    let raw = decode_payload_or_raw(payload);
+    let normalized = match serde_json::from_slice::<Value>(&raw) {
+        Ok(Value::Object(mut obj)) => {
+            if !obj.contains_key("type") {
+                obj.insert("type".to_string(), Value::String(expected_type.to_string()));
+            }
+            Value::Object(obj)
+        }
+        Ok(Value::String(sdp)) => json!({
+            "type": expected_type,
+            "sdp": sdp,
+        }),
+        Ok(other) => {
+            return Err(ProtocolError::InvalidPayload {
+                id: id.to_string(),
+                reason: format!("expected session description object or string, got {other}"),
+            });
+        }
+        Err(_) => {
+            let sdp = String::from_utf8(raw).map_err(|err| ProtocolError::InvalidPayload {
+                id: id.to_string(),
+                reason: format!("payload is neither base64 json nor utf8 sdp: {err}"),
+            })?;
+            json!({
+                "type": expected_type,
+                "sdp": sdp,
+            })
+        }
+    };
+
+    let json_bytes = serde_json::to_vec(&normalized).map_err(|err| ProtocolError::InvalidPayload {
+        id: id.to_string(),
+        reason: format!("failed to serialize normalized session description: {err}"),
+    })?;
+    Ok(BASE64_STANDARD.encode(json_bytes))
+}
+
+fn canonicalize_candidate_payload(id: &str, payload: &str) -> Result<String, ProtocolError> {
+    let raw = decode_payload_or_raw(payload);
+    let normalized = match serde_json::from_slice::<Value>(&raw) {
+        Ok(Value::Object(obj)) => Value::Object(obj),
+        Ok(Value::String(candidate)) => json!({
+            "candidate": candidate,
+        }),
+        Ok(other) => {
+            return Err(ProtocolError::InvalidPayload {
+                id: id.to_string(),
+                reason: format!("expected candidate object or string, got {other}"),
+            });
+        }
+        Err(_) => {
+            let candidate = String::from_utf8(raw).map_err(|err| ProtocolError::InvalidPayload {
+                id: id.to_string(),
+                reason: format!("payload is neither base64 json nor utf8 candidate: {err}"),
+            })?;
+            json!({
+                "candidate": candidate,
+            })
+        }
+    };
+
+    let json_bytes = serde_json::to_vec(&normalized).map_err(|err| ProtocolError::InvalidPayload {
+        id: id.to_string(),
+        reason: format!("failed to serialize normalized candidate: {err}"),
+    })?;
+    Ok(BASE64_STANDARD.encode(json_bytes))
+}
+
+fn decode_payload_or_raw(payload: &str) -> Vec<u8> {
+    BASE64_STANDARD
+        .decode(payload)
+        .unwrap_or_else(|_| payload.as_bytes().to_vec())
 }
 
 #[cfg(test)]
@@ -414,5 +567,48 @@ mod tests {
             }
             other => panic!("unexpected parse result: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_message_text_accepts_legacy_session_id_field() {
+        let parsed = parse_browser_message_text(
+            r#"{"id":"joinRoom","session_id":" worker-123 ","data":" room-1 "}"#,
+        )
+        .expect("browser message should parse");
+
+        assert_eq!(parsed.id, signal_ids::JOIN_ROOM);
+        assert_eq!(parsed.session_id.as_deref(), Some("worker-123"));
+        assert_eq!(parsed.data.as_deref(), Some("room-1"));
+    }
+
+    #[test]
+    fn parse_message_text_canonicalizes_legacy_answer_payload() {
+        let raw = BASE64_STANDARD.encode("v=0\r\n");
+        let parsed = parse_browser_message_text(
+            &format!(r#"{{"id":"answer","sessionID":"worker-1","data":"{raw}"}}"#),
+        )
+        .expect("answer should parse");
+
+        let decoded = BASE64_STANDARD
+            .decode(parsed.data.expect("payload"))
+            .expect("decode canonical payload");
+        let json: Value = serde_json::from_slice(&decoded).expect("json payload");
+        assert_eq!(json["type"], "answer");
+        assert_eq!(json["sdp"], "v=0\r\n");
+    }
+
+    #[test]
+    fn parse_message_text_canonicalizes_string_candidate_payload() {
+        let raw = BASE64_STANDARD.encode("candidate:1 1 UDP 1 127.0.0.1 1234 typ host");
+        let parsed = parse_worker_message_text(
+            &format!(r#"{{"id":"candidate","sessionID":"client-1","data":"{raw}"}}"#),
+        )
+        .expect("candidate should parse");
+
+        let decoded = BASE64_STANDARD
+            .decode(parsed.data.expect("payload"))
+            .expect("decode canonical payload");
+        let json: Value = serde_json::from_slice(&decoded).expect("json payload");
+        assert_eq!(json["candidate"], "candidate:1 1 UDP 1 127.0.0.1 1234 typ host");
     }
 }

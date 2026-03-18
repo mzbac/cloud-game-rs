@@ -67,13 +67,13 @@ describe("protocol helpers", () => {
   });
 
   describe("parseSignalMessage", () => {
-    it("accepts legacy session_id", () => {
+    it("requires canonical sessionID", () => {
       expect(
         parseSignalMessage('{"id":"offer","data":"x","session_id":"legacy-id"}')
       ).toEqual({
         id: "offer",
         data: "x",
-        sessionID: "legacy-id",
+        targetID: undefined,
       });
     });
 

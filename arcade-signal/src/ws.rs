@@ -19,9 +19,10 @@ use crate::controllers::{Controllers, JOIN_CODE_TTL};
 use crate::protocol::{
     controller_audio_message, controller_joined_message, controller_left_message,
     controller_ready_message, controller_rejected_message, forward_to_client_message,
-    forward_to_worker_message, games_message, parse_browser_command, parse_worker_command,
-    terminate_session_message, update_player_count_message, BrowserCommand, OutboundEvent, Tx,
-    WorkerCommand, WorkerEventKind,
+    forward_to_worker_message, games_message, parse_browser_command, parse_browser_message_text,
+    parse_worker_command, parse_worker_message_text, terminate_session_message,
+    update_player_count_message, BrowserCommand, OutboundEvent, Tx, WorkerCommand,
+    WorkerEventKind,
 };
 use crate::registry::Registry;
 
@@ -425,13 +426,20 @@ async fn run_peer_socket(socket: WebSocket, state: SharedState, role: PeerRole) 
 
     while let Some(Ok(message)) = receiver.next().await {
         match message {
-            Message::Text(text) => match serde_json::from_str::<SignalMessage>(&text) {
-                Ok(req) => match role {
-                    PeerRole::Browser => state.handle_browser_message(&peer_id, req).await,
-                    PeerRole::Worker => state.handle_worker_message(&peer_id, req).await,
-                },
-                Err(err) => warn!("invalid message from {} {}: {}", role.label(), peer_id, err),
-            },
+            Message::Text(text) => {
+                let parsed = match role {
+                    PeerRole::Browser => parse_browser_message_text(&text),
+                    PeerRole::Worker => parse_worker_message_text(&text),
+                };
+
+                match parsed {
+                    Ok(req) => match role {
+                        PeerRole::Browser => state.handle_browser_message(&peer_id, req).await,
+                        PeerRole::Worker => state.handle_worker_message(&peer_id, req).await,
+                    },
+                    Err(err) => warn!("invalid message from {} {}: {}", role.label(), peer_id, err),
+                }
+            }
             Message::Close(_) => break,
             Message::Pong(_) | Message::Ping(_) => {}
             _ => {}

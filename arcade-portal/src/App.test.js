@@ -10,7 +10,7 @@ describe("protocol helpers", () => {
       buildSignalingMessage({
         id: "offer",
         data: "abc",
-        sessionID: "session-id",
+        targetID: "session-id",
       })
     ).toEqual({
       id: "offer",
@@ -23,7 +23,7 @@ describe("protocol helpers", () => {
     expect(parseSignalMessage('{"id":"offer","data":"x","sessionID":"s"}')).toEqual({
       id: "offer",
       data: "x",
-      sessionID: "s",
+      targetID: "s",
     });
   });
 

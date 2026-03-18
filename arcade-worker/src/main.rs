@@ -16,6 +16,7 @@ mod health;
 mod room;
 mod room_state;
 mod signal_client;
+mod signal_router;
 mod url_utils;
 mod video_sender;
 mod webrtc_session;

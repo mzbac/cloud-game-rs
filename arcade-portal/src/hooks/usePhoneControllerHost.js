@@ -128,12 +128,12 @@ export const usePhoneControllerHost = ({ conn, workerID, onEnableAudio }) => {
       }
 
       if (msg.id === SIGNALING_MESSAGE_IDS.CONTROLLER_JOINED) {
-        addController(msg.sessionID);
+        addController(msg.targetID);
         return;
       }
 
       if (msg.id === SIGNALING_MESSAGE_IDS.CONTROLLER_LEFT) {
-        removeController(msg.sessionID);
+        removeController(msg.targetID);
       }
     };
 

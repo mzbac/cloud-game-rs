@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, warn};
 use worker::{RetroPixelFormat, VideoFrame};
 
-use crate::room::Room;
+use crate::room::{Room, VideoPressureSnapshot, VideoSenderUpdate};
 
 pub(crate) const VIDEO_RTP_CLOCK_RATE: u32 = 90_000;
 // WebKit/Safari rejects unconstrained Baseline (42001f) in SDP negotiation; use Constrained Baseline.
@@ -28,10 +28,7 @@ const VIDEO_FRAME_INTERVAL_MS_MIN: u64 = 16;
 const VIDEO_FRAME_INTERVAL_MS_MAX: u64 = 50;
 const VIDEO_FRAME_INTERVAL_STEP_MS: u64 = 4;
 const VIDEO_SCALE_FALLBACK_DISABLE_AFTER: u32 = 1;
-const VIDEO_SCALE_FALLBACK_COOLDOWN_FRAMES: u32 = 0;
-const VIDEO_ENCODER_FAILURE_COOLDOWN_FRAMES: u32 = 0;
 const VIDEO_ENCODER_EMPTY_RETRY_THRESHOLD: u32 = 360000;
-const VIDEO_ENCODER_EMPTY_RECOVERY_COOLDOWN_FRAMES: u32 = 0;
 const VIDEO_STARTUP_ENCODE_RETRY_LIMIT: u8 = 3;
 /// Avoid server-side upscaling; browsers can scale cheaply.
 const VIDEO_UPSCALE_LIMIT: f32 = 1.0;
@@ -43,7 +40,6 @@ const VIDEO_ENCODER_MIN_BITRATE_BPS: u32 = 500_000;
 const VIDEO_ENCODER_MAX_BITRATE_BPS: u32 = 4_000_000;
 /// Minimum valid H264 payload size. Must pass all payloads to retain WebRTC packet pacing (e.g. empty P-frames are 12-13 bytes).
 const VIDEO_ENCODER_MIN_PAYLOAD_BYTES: usize = 1;
-const VIDEO_SCALE_FALLBACK_TO_SOURCE: bool = true;
 const VIDEO_QUEUE_PRESSURE_HIGH_WATERMARK: usize = 2;
 
 #[derive(Clone, Copy)]
@@ -191,8 +187,9 @@ pub(crate) fn spawn_frame_sender(frame_receiver: Receiver<VideoFrame>, room: Arc
                 continue;
             }
 
-            state.handle_session_transitions(&room, width, height);
-            state.handle_frame(frame, &room);
+            let sender_update = room.next_video_sender_update();
+            state.handle_session_transitions(sender_update, width, height);
+            state.handle_frame(frame, &room, sender_update.pressure);
         }
     });
 }
@@ -208,11 +205,8 @@ struct FrameSenderState {
     had_active_session: bool,
     encoder_frames_since_refresh: u64,
     scaled_failures_for_source: u32,
-    scaled_cooldown_frames: u32,
-    encode_failure_cooldown_frames: u32,
     last_encode_settings: Option<EncodeSettings>,
     encode_empty_streak: u32,
-    encode_empty_recovery_cooldown_frames: u32,
     rgba_scratch: Vec<u8>,
     scaled_scratch: Vec<u8>,
     disable_scaled_for_source: bool,
@@ -252,11 +246,8 @@ impl FrameSenderState {
             had_active_session: false,
             encoder_frames_since_refresh: 0,
             scaled_failures_for_source: 0,
-            scaled_cooldown_frames: 0,
-            encode_failure_cooldown_frames: 0,
             last_encode_settings: None,
             encode_empty_streak: 0,
-            encode_empty_recovery_cooldown_frames: 0,
             rgba_scratch: Vec::new(),
             scaled_scratch: Vec::new(),
             disable_scaled_for_source: false,
@@ -273,21 +264,24 @@ impl FrameSenderState {
         self.packet_timestamp = 0;
         self.disable_scaled_for_source = false;
         self.scaled_failures_for_source = 0;
-        self.scaled_cooldown_frames = 0;
-        self.encode_failure_cooldown_frames = 0;
         self.encode_empty_streak = 0;
         self.last_encode_settings = None;
         self.encoder_frames_since_refresh = 0;
         self.encoder.force_intra_frame();
     }
 
-    fn handle_session_transitions(&mut self, room: &Room, width: u32, height: u32) {
+    fn handle_session_transitions(
+        &mut self,
+        sender_update: VideoSenderUpdate,
+        width: u32,
+        height: u32,
+    ) {
         if !self.had_active_session {
             self.reset_for_active_session();
             return;
         }
 
-        if room.take_keyframe_refresh() {
+        if sender_update.refresh_encoder {
             let refresh_settings = EncodeSettings {
                 width: self.profile.target_width,
                 height: self.profile.target_height,
@@ -306,30 +300,25 @@ impl FrameSenderState {
             self.startup_encode_failures = 0;
             self.scaled_failures_for_source = 0;
             self.disable_scaled_for_source = false;
-            self.scaled_cooldown_frames = 0;
-            self.encode_failure_cooldown_frames = 0;
             self.encode_empty_streak = 0;
             self.encoder_frames_since_refresh = 0;
         }
 
-        if room.take_force_idr() {
+        if sender_update.force_idr {
             self.encoder.force_intra_frame();
         }
 
         if (width, height) != self.last_source_dims {
             self.last_source_dims = (width, height);
             self.scaled_failures_for_source = 0;
-            self.scaled_cooldown_frames = 0;
-            self.encode_failure_cooldown_frames = 0;
             self.encode_empty_streak = 0;
             self.disable_scaled_for_source = false;
         }
     }
 
-    fn handle_frame(&mut self, frame: VideoFrame, room: &Room) {
+    fn handle_frame(&mut self, frame: VideoFrame, room: &Room, pressure: VideoPressureSnapshot) {
         let now = Instant::now();
         let mut frame = frame;
-        let pressure = room.take_video_pressure_snapshot();
         if pressure.congested_events > 0 || pressure.dropped_frames > 0 {
             if !is_min_video_profile(&self.profile) {
                 degrade_video_profile(&mut self.profile);
@@ -376,21 +365,9 @@ impl FrameSenderState {
             .saturating_div(1000))
         .max(1) as u32;
 
-        if self.scaled_cooldown_frames > 0 {
-            self.scaled_cooldown_frames = self.scaled_cooldown_frames.saturating_sub(1);
-            if self.scaled_cooldown_frames == 0 {
-                self.disable_scaled_for_source = false;
-            }
-        }
-        if self.encode_failure_cooldown_frames > 0 {
-            self.encode_failure_cooldown_frames = self.encode_failure_cooldown_frames.saturating_sub(1);
-        }
-
         let mut scaled_attempted_this_frame = false;
         let mut scaled_transport_failed = false;
-        let mut used_scaled_for_payload = false;
-        let allow_scaled =
-            should_attempt_scaled && !self.disable_scaled_for_source && self.scaled_cooldown_frames == 0;
+        let allow_scaled = should_attempt_scaled && !self.disable_scaled_for_source;
 
         if VIDEO_ENCODER_REFRESH_FRAMES > 0
             && self.encoder_frames_since_refresh >= VIDEO_ENCODER_REFRESH_FRAMES
@@ -399,61 +376,45 @@ impl FrameSenderState {
             self.encoder_frames_since_refresh = 0;
         }
 
-        let mut attempted_encode = false;
-        let mut payload = if self.encode_failure_cooldown_frames == 0 {
-            attempted_encode = true;
-            if allow_scaled {
-                match build_video_payload(
-                    &mut frame,
-                    &self.profile,
-                    &mut self.encoder,
-                    allow_scaled,
-                    &mut self.last_encode_settings,
-                    &mut self.encode_empty_streak,
-                    &mut self.encode_empty_recovery_cooldown_frames,
-                    &mut self.rgba_scratch,
-                    &mut self.scaled_scratch,
-                ) {
-                    Some((candidate, scaled)) => {
-                        scaled_attempted_this_frame = true;
-                        used_scaled_for_payload = scaled;
-                        if !scaled && should_attempt_scaled {
-                            scaled_transport_failed = true;
-                        }
-                        if scaled {
-                            self.scaled_failures_for_source = 0;
-                        }
-                        Some(candidate)
-                    }
-                    None => {
-                        scaled_attempted_this_frame = true;
+        let mut payload = if allow_scaled {
+            match build_video_payload(
+                &mut frame,
+                &self.profile,
+                &mut self.encoder,
+                allow_scaled,
+                &mut self.last_encode_settings,
+                &mut self.encode_empty_streak,
+                &mut self.rgba_scratch,
+                &mut self.scaled_scratch,
+            ) {
+                Some((candidate, scaled)) => {
+                    scaled_attempted_this_frame = true;
+                    if !scaled && should_attempt_scaled {
                         scaled_transport_failed = true;
-                        None
                     }
+                    if scaled {
+                        self.scaled_failures_for_source = 0;
+                    }
+                    Some(candidate)
                 }
-            } else {
-                build_video_payload(
-                    &mut frame,
-                    &self.profile,
-                    &mut self.encoder,
-                    false,
-                    &mut self.last_encode_settings,
-                    &mut self.encode_empty_streak,
-                    &mut self.encode_empty_recovery_cooldown_frames,
-                    &mut self.rgba_scratch,
-                    &mut self.scaled_scratch,
-                )
-                .map(|(candidate, _)| candidate)
+                None => {
+                    scaled_attempted_this_frame = true;
+                    scaled_transport_failed = true;
+                    None
+                }
             }
         } else {
-            None
-        };
-
-        let encode_failed = attempted_encode && payload.is_none();
-        if encode_failed && VIDEO_ENCODER_FAILURE_COOLDOWN_FRAMES > 0 {
-            if self.encode_failure_cooldown_frames == 0 {
-                self.encode_failure_cooldown_frames = VIDEO_ENCODER_FAILURE_COOLDOWN_FRAMES;
-            }
+            build_video_payload(
+                &mut frame,
+                &self.profile,
+                &mut self.encoder,
+                false,
+                &mut self.last_encode_settings,
+                &mut self.encode_empty_streak,
+                &mut self.rgba_scratch,
+                &mut self.scaled_scratch,
+            )
+            .map(|(candidate, _)| candidate)
         };
 
         if allow_scaled && scaled_attempted_this_frame && scaled_transport_failed {
@@ -461,17 +422,9 @@ impl FrameSenderState {
             if self.scaled_failures_for_source >= VIDEO_SCALE_FALLBACK_DISABLE_AFTER {
                 self.scaled_failures_for_source = 0;
                 self.disable_scaled_for_source = true;
-                self.scaled_cooldown_frames = VIDEO_SCALE_FALLBACK_COOLDOWN_FRAMES;
-            } else {
-                self.scaled_cooldown_frames = VIDEO_SCALE_FALLBACK_COOLDOWN_FRAMES;
             }
         } else if allow_scaled && scaled_attempted_this_frame && !scaled_transport_failed {
-            if used_scaled_for_payload {
-                self.scaled_failures_for_source = 0;
-            } else {
-                // Source payload succeeded after scaled miss; keep scaled retry open to recover quality.
-                self.scaled_failures_for_source = 0;
-            }
+            self.scaled_failures_for_source = 0;
             self.disable_scaled_for_source = false;
         }
         if let Some(ref candidate) = payload {
@@ -486,12 +439,6 @@ impl FrameSenderState {
         } else if !is_min_video_profile(&self.profile) {
             degrade_video_profile(&mut self.profile);
         }
-
-        if attempted_encode && payload.is_none() && VIDEO_ENCODER_FAILURE_COOLDOWN_FRAMES > 0 {
-            if self.encode_failure_cooldown_frames == 0 {
-                self.encode_failure_cooldown_frames = VIDEO_ENCODER_FAILURE_COOLDOWN_FRAMES;
-            }
-        };
 
         let payload = match payload {
             Some(payload) => payload,
@@ -532,7 +479,6 @@ fn build_video_payload(
     allow_scaled: bool,
     last_encode_settings: &mut Option<EncodeSettings>,
     empty_encode_streak: &mut u32,
-    empty_recovery_cooldown_frames: &mut u32,
     rgba_scratch: &mut Vec<u8>,
     scaled_scratch: &mut Vec<u8>,
 ) -> Option<(EncodedFrame, bool)> {
@@ -566,14 +512,9 @@ fn build_video_payload(
                 scaled_scratch.as_slice(),
                 last_encode_settings,
                 empty_encode_streak,
-                empty_recovery_cooldown_frames,
             ) {
                 return Some((output, true));
             }
-        }
-
-        if !VIDEO_SCALE_FALLBACK_TO_SOURCE {
-            return None;
         }
 
         if let Some(output) = encode_frame_with_retry(
@@ -584,7 +525,6 @@ fn build_video_payload(
             rgba_raw,
             last_encode_settings,
             empty_encode_streak,
-            empty_recovery_cooldown_frames,
         ) {
             return Some((output, false));
         }
@@ -600,7 +540,6 @@ fn build_video_payload(
         rgba_raw,
         last_encode_settings,
         empty_encode_streak,
-        empty_recovery_cooldown_frames,
     ) {
         return Some((output, false));
     }
@@ -632,8 +571,7 @@ fn new_encoder_for_settings(settings: EncodeSettings) -> Option<Encoder> {
         .bitrate(BitRate::from_bps(bitrate_bps))
         .max_frame_rate(FrameRate::from_hz(60.0))
         .rate_control_mode(RateControlMode::Bitrate)
-        // OpenH264 requires frame skipping for effective bitrate control in real-time modes.
-        .skip_frames(true)
+        .skip_frames(false)
         .complexity(Complexity::Low)
         .adaptive_quantization(false)
         .background_detection(false)
@@ -665,12 +603,7 @@ fn encode_frame_with_retry(
     rgba_raw: &[u8],
     last_encode_settings: &mut Option<EncodeSettings>,
     empty_encode_streak: &mut u32,
-    empty_recovery_cooldown_frames: &mut u32,
 ) -> Option<EncodedFrame> {
-    if *empty_recovery_cooldown_frames > 0 {
-        *empty_recovery_cooldown_frames = empty_recovery_cooldown_frames.saturating_sub(1);
-    }
-
     let rgba = RgbaSliceU8::new(
         rgba_raw,
         (usize::try_from(width).ok()?, usize::try_from(height).ok()?),
@@ -723,26 +656,19 @@ fn encode_frame_with_retry(
 
     if let Some(output) = output {
         *empty_encode_streak = 0;
-        *empty_recovery_cooldown_frames = 0;
         return Some(output);
     }
 
     *empty_encode_streak = empty_encode_streak.saturating_add(1);
-    if *empty_encode_streak >= VIDEO_ENCODER_EMPTY_RETRY_THRESHOLD
-        && *empty_recovery_cooldown_frames == 0
-    {
+    if *empty_encode_streak >= VIDEO_ENCODER_EMPTY_RETRY_THRESHOLD {
         if let Some(recovered_encoder) = new_encoder_for_settings(settings) {
             *encoder = recovered_encoder;
             *last_encode_settings = Some(settings);
             if let Some(output) = encode_once(encoder, &yuv) {
                 *empty_encode_streak = 0;
-                *empty_recovery_cooldown_frames = 0;
                 return Some(output);
             }
             *empty_encode_streak = 1;
-            *empty_recovery_cooldown_frames = VIDEO_ENCODER_EMPTY_RECOVERY_COOLDOWN_FRAMES;
-        } else {
-            *empty_recovery_cooldown_frames = VIDEO_ENCODER_EMPTY_RECOVERY_COOLDOWN_FRAMES;
         }
     }
 

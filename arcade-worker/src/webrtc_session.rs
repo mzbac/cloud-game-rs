@@ -3,7 +3,6 @@ use crossbeam_channel::Sender;
 use rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
 use rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
 use rtcp::transport_feedbacks::rapid_resynchronization_request::RapidResynchronizationRequest;
-use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -33,6 +32,20 @@ use crate::video_sender;
 
 const VIDEO_SESSION_QUEUE_CAPACITY: usize = 3;
 
+fn decode_session_description_payload(payload: &str) -> Result<RTCSessionDescription, String> {
+    let raw = BASE64_STANDARD
+        .decode(payload)
+        .map_err(|err| format!("decode answer payload failed: {err}"))?;
+    serde_json::from_slice(&raw).map_err(|err| format!("decode session description failed: {err}"))
+}
+
+fn decode_candidate_payload(payload: &str) -> Result<RTCIceCandidateInit, String> {
+    let raw = BASE64_STANDARD
+        .decode(payload)
+        .map_err(|err| format!("decode candidate failed: {err}"))?;
+    serde_json::from_slice(&raw).map_err(|err| format!("decode candidate JSON failed: {err}"))
+}
+
 pub(crate) async fn apply_answer(peer: &Arc<RTCPeerConnection>, payload: &str) -> Result<(), String> {
     if payload.is_empty() {
         return Ok(());
@@ -43,31 +56,7 @@ pub(crate) async fn apply_answer(peer: &Arc<RTCPeerConnection>, payload: &str) -
         return Ok(());
     }
 
-    let raw = BASE64_STANDARD
-        .decode(payload)
-        .map_err(|err| format!("decode answer payload failed: {err}"))?;
-    let raw = match serde_json::from_slice::<Value>(&raw) {
-        Ok(Value::Object(mut obj)) => {
-            if !obj.contains_key("type") {
-                obj.insert("type".to_string(), Value::String("answer".to_string()));
-            }
-            serde_json::to_vec(&obj)
-                .map_err(|err| format!("normalize session description failed: {err}"))?
-        }
-        Ok(_) => raw,
-        Err(err) => {
-            let payload_text = String::from_utf8(raw.clone()).map_err(|utf8_err| {
-                format!("decode answer payload json failed: {err}; utf8: {utf8_err}")
-            })?;
-            serde_json::to_vec(&serde_json::json!({
-                "type": "answer",
-                "sdp": payload_text,
-            }))
-            .map_err(|err| format!("normalize legacy answer payload failed: {err}"))?
-        }
-    };
-    let desc: RTCSessionDescription = serde_json::from_slice(&raw)
-        .map_err(|err| format!("decode session description failed: {err}"))?;
+    let desc = decode_session_description_payload(payload)?;
     peer.set_remote_description(desc)
         .await
         .map_err(|err| format!("set_remote_description failed: {err}"))?;
@@ -78,28 +67,7 @@ pub(crate) async fn apply_candidate(peer: &Arc<RTCPeerConnection>, payload: &str
     if payload.is_empty() {
         return Ok(());
     }
-    let raw = BASE64_STANDARD
-        .decode(payload)
-        .map_err(|err| format!("decode candidate failed: {err}"))?;
-    let raw = match serde_json::from_slice::<Value>(&raw) {
-        Ok(Value::Object(_)) => raw,
-        Ok(Value::String(text)) => serde_json::to_vec(&serde_json::json!({
-            "candidate": text,
-        }))
-        .map_err(|err| format!("normalize string candidate failed: {err}"))?,
-        Ok(_) => raw,
-        Err(err) => {
-            let text = String::from_utf8(raw).map_err(|utf8_err| {
-                format!("decode candidate payload json failed: {err}; utf8: {utf8_err}")
-            })?;
-            serde_json::to_vec(&serde_json::json!({
-                "candidate": text,
-            }))
-            .map_err(|err| format!("normalize legacy candidate payload failed: {err}"))?
-        }
-    };
-    let candidate: RTCIceCandidateInit = serde_json::from_slice(&raw)
-        .map_err(|err| format!("decode candidate JSON failed: {err}"))?;
+    let candidate = decode_candidate_payload(payload)?;
     peer.add_ice_candidate(candidate)
         .await
         .map_err(|err| format!("add_ice_candidate failed: {err}"))?;
@@ -107,7 +75,7 @@ pub(crate) async fn apply_candidate(peer: &Arc<RTCPeerConnection>, payload: &str
 }
 
 pub(crate) async fn create_session(
-    session_id: String,
+    client_id: String,
     room: Arc<Room>,
     outbound: mpsc::UnboundedSender<SignalMessage>,
     input_sender: Sender<InputEvent>,
@@ -185,7 +153,7 @@ pub(crate) async fn create_session(
         .map_err(|err| format!("add video track failed: {err:?}"))?;
 
     let room_for_rtcp = room.clone();
-    let sid_for_rtcp = session_id.clone();
+    let client_id_for_rtcp = client_id.clone();
     tokio::spawn(async move {
         loop {
             let (packets, _attrs) = match rtp_sender.read_rtcp().await {
@@ -206,24 +174,24 @@ pub(crate) async fn create_session(
             }
 
             if request_keyframe {
-                room_for_rtcp.request_idr();
-                debug!(session_id = %sid_for_rtcp, "rtcp keyframe request received");
+                room_for_rtcp.note_keyframe_requested();
+                debug!(client_id = %client_id_for_rtcp, "rtcp keyframe request received");
             }
         }
     });
 
     let room_for_state = room.clone();
-    let sid = session_id.clone();
+    let client_id_for_state = client_id.clone();
     peer.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         let room = room_for_state.clone();
-        let sid = sid.clone();
+        let client_id = client_id_for_state.clone();
         Box::pin(async move {
-            info!(session_id = sid, state = ?state, "peer state changed");
+            info!(client_id, state = ?state, "peer state changed");
             if matches!(
                 state,
                 RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed
             ) {
-                if let Some(session) = room.unregister_session(&sid) {
+                if let Some(session) = room.unregister_client_session(&client_id) {
                     let peer = Arc::clone(session.peer());
                     tokio::spawn(async move {
                         let _ = peer.close().await;
@@ -234,29 +202,29 @@ pub(crate) async fn create_session(
     }));
 
     let outbound_ice = outbound.clone();
-    let session_for_ice = session_id.clone();
+    let client_id_for_ice = client_id.clone();
     peer.on_ice_candidate(Box::new(move |candidate| {
         let outbound_ice = outbound_ice.clone();
-        let session_for_ice = session_for_ice.clone();
+        let client_id_for_ice = client_id_for_ice.clone();
         Box::pin(async move {
             if let Some(candidate) = candidate {
                 let candidate = match candidate.to_json() {
                     Ok(value) => value,
                     Err(err) => {
-                        warn!(session_id = session_for_ice, error = %err, "failed to serialize candidate");
+                        warn!(client_id = client_id_for_ice, error = %err, "failed to serialize candidate");
                         return;
                     }
                 };
                 let data = match serde_json::to_string(&candidate) {
                     Ok(json) => BASE64_STANDARD.encode(json),
                     Err(err) => {
-                        warn!(session_id = session_for_ice, error = %err, "failed to serialize candidate payload");
+                        warn!(client_id = client_id_for_ice, error = %err, "failed to serialize candidate payload");
                         return;
                     }
                 };
                 let msg = SignalMessage::with_payload(
                     signal_ids::CANDIDATE,
-                    Some(session_for_ice.clone()),
+                    Some(client_id_for_ice.clone()),
                     Some(data),
                 );
                 let _ = outbound_ice.send(msg);
@@ -279,11 +247,11 @@ pub(crate) async fn create_session(
         .await
         .map_err(|err| format!("create audio channel failed: {err:?}"))?;
 
-    let sid_for_input = session_id.clone();
+    let client_id_for_input = client_id.clone();
     let room_for_input = room.clone();
     let input_sender_for_input = input_sender.clone();
     data_input_channel.on_message(Box::new(move |msg: DataChannelMessage| {
-        let sid_for_input = sid_for_input.clone();
+        let client_id_for_input = client_id_for_input.clone();
         let input_sender = input_sender_for_input.clone();
         let room_for_input = room_for_input.clone();
         Box::pin(async move {
@@ -292,7 +260,7 @@ pub(crate) async fn create_session(
             }
 
             let raw = msg.data.to_vec();
-            room_for_input.buffer_or_send_input(&sid_for_input, raw, &input_sender, "datachannel");
+            room_for_input.buffer_or_send_input(&client_id_for_input, raw, &input_sender, "datachannel");
         })
     }));
 
@@ -307,7 +275,7 @@ pub(crate) async fn create_session(
     let video_queue = Arc::new(VideoSampleQueue::new(VIDEO_SESSION_QUEUE_CAPACITY));
 
     let session = Arc::new(Session::new(
-        session_id.clone(),
+        client_id.clone(),
         Arc::clone(&peer),
         data_input_channel,
         video_track.clone(),
@@ -315,7 +283,7 @@ pub(crate) async fn create_session(
         audio_channel,
     ));
 
-    let session_id_for_task = session_id.clone();
+    let client_id_for_task = client_id.clone();
     let room_for_video_sender = room.clone();
     let peer_for_video_sender = Arc::clone(&peer);
     tokio::spawn(async move {
@@ -330,7 +298,7 @@ pub(crate) async fn create_session(
 
             if let Err(err) = video_track.write_sample(sample.sample()).await {
                 warn!(
-                    session_id = %session_id_for_task,
+                    client_id = %client_id_for_task,
                     bytes = sample.sample().data.len(),
                     error = ?err,
                     "video send failed; closing peer"
@@ -339,18 +307,18 @@ pub(crate) async fn create_session(
             }
         }
         video_queue.close();
-        room_for_video_sender.unregister_session(&session_id_for_task);
+        room_for_video_sender.unregister_client_session(&client_id_for_task);
         let _ = peer_for_video_sender.close().await;
-        debug!(session_id = session_id_for_task, "video sender task ended");
+        debug!(client_id = client_id_for_task, "video sender task ended");
     });
 
-    if !room.register_session(session_id.clone(), Arc::clone(&session)) {
+    if !room.register_client_session(client_id.clone(), Arc::clone(&session)) {
         peer.close().await.map_err(|err| format!("{err:?}"))?;
         return Err("session already exists".to_string());
     }
 
-    room.request_encoder_refresh();
-    if let Some(slot) = room.player_index_for_session(session.id()) {
+    room.note_video_session_registered();
+    if let Some(slot) = room.player_index_for_client(session.id()) {
         session.set_player(Some(slot));
     }
 
@@ -358,7 +326,7 @@ pub(crate) async fn create_session(
         serde_json::to_vec(&offer).map_err(|err| format!("serialize offer failed: {err}"))?;
     let msg = SignalMessage::with_payload(
         signal_ids::OFFER,
-        Some(session_id),
+        Some(client_id),
         Some(BASE64_STANDARD.encode(local_desc)),
     );
     outbound
