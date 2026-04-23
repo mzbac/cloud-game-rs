@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM --platform=$BUILDPLATFORM docker.io/library/node:20-alpine AS build
+FROM --platform=$BUILDPLATFORM docker.io/library/node:25-alpine AS build
 WORKDIR /app
 
 ENV NODE_ENV=development
