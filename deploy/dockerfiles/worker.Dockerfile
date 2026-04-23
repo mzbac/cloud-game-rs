@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM --platform=$BUILDPLATFORM docker.io/library/rust:1.88 AS build
+FROM --platform=$BUILDPLATFORM docker.io/library/rust:1.95 AS build
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
