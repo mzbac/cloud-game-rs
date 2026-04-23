@@ -19,7 +19,7 @@ tokio-tungstenite = "0.26"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webrtc = "0.12"
-rtcp = "0.12"
+rtcp = "0.17"
 thiserror = "1.0"
 
 [[bin]]
